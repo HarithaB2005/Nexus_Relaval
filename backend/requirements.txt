@@ -1,18 +1,38 @@
-# Web & API
-fastapi
-uvicorn[standard]
-pydantic
-pydantic-settings
-requests
-httpx
+# Core Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
 
-# Frontend & UI
-streamlit
+# Database
+asyncpg==0.29.0
 
-# AI & Processing
-groq
-python-docx
-asyncio
+# Authentication & Security
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+python-multipart==0.0.6
 
-# Infrastructure
-python-dotenv
+# Environment
+python-dotenv==1.0.0
+
+# HTTP & API
+requests==2.31.0
+httpx==0.25.0
+
+# LLM APIs
+groq==0.4.2
+ollama==0.1.0
+google-generativeai==0.3.0
+
+# File Processing
+PyPDF2==4.0.1
+python-docx==0.8.11
+
+# Payment
+stripe==7.4.0
+
+# Production Server
+gunicorn==21.2.0
+
+# Monitoring
+python-json-logger==2.0.7

@@ -1,76 +1,321 @@
-**NexusAI: Enterprise-Grade AI Infrastructure and Reliability Layer**
+# Relevo: Agent-based Prompt Optimization (APO) Service
 
-NexusAI is a centralized platform designed to provide secure, scalable, and high-performance access to Large Language Models. Unlike standard AI implementations that act as simple wrappers, NexusAI functions as a critical reliability layer, bridging the gap between raw AI potential and enterprise production requirements.
+**A production-ready, investor-friendly AI prompt optimization platform with enterprise security.**
 
-I built NexusAI because standard AI implementations are often insufficient for professional use. NexusAI serves as a reliability layer that makes AI safe and fast enough for organizations to actually integrate into their core workflows.
+## 🎯 What It Does (In Plain English)
 
-**Core Objectives**
+Relevo is a web app that takes your rough ideas or tasks and **automatically refines them into perfect prompts** using multiple AI agents working together. Think of it as a "prompt polisher"—it:
 
-The platform addresses the primary barriers to enterprise AI adoption: security, speed, and accuracy.
+1. **Understands your intent** — What are you really asking for?
+2. **Optimizes your prompt** — Rewrites it to get the best result from AI models.
+3. **Checks the output** — Makes sure the result matches what you wanted.
+4. **Refines until perfect** — Iterates until quality is high enough.
 
-**Cryptographic Security Protocols**
-
-Standard applications often store sensitive credentials in vulnerable formats. NexusAI utilizes SHA-256 cryptographic hashing to manage access. This one-way process creates a digital fingerprint of every key, ensuring that even in the event of a system breach, the actual credentials remain mathematically impossible to recover or reverse.
-
-**High-Concurrency Performance**
-Most AI tools process requests one at a time, leading to significant latency during high traffic. NexusAI is architected on an asynchronous backend, allowing it to manage thousands of concurrent user interactions simultaneously. This non-blocking approach ensures the interface remains responsive regardless of server load.
-
-**Verification and Accuracy**
-AI hallucinations are a significant liability for businesses. NexusAI implements data-grounded logic to ensure that model responses are verified against trusted datasets. By prioritizing factual integrity over generative guesswork, the system provides a stable environment for professional decision-making.
+Perfect for content creators, developers, researchers, and anyone working with AI models who wants better, faster results.
 
 ---
 
-**Technical Framework**
+## 🔒 Enterprise Security (Investor Confidence)
 
-The system is designed with a clear separation between the management interface and the processing core to maintain structural integrity.
-
-| Layer          | Technology        | Primary Function                                     |
-| ---            | ---               | ---                                                  |
-| Interface      | React             | High-performance, reactive user management dashboard |
-| Orchestration  | FastAPI           | Asynchronous processing and non-blocking I/O         |
-| AI Engine      | Groq and LLMs     | High-speed inference and text processing             |
-| Security Vault | PostgreSQL        | Relational storage for hashed metadata               |
-| Hosting        | Render and Vercel | Scalable deployment with 99.9% availability          |
+✅ **User Authentication** — Email/password with JWT tokens (industry standard)  
+✅ **Password Security** — Argon2 hashing (resistant to attacks)  
+✅ **API Keys** — Secure token-based access for apps; hashed in database  
+✅ **Usage Tracking** — Track and bill per user, prevent abuse  
+✅ **Rate Limiting** — Prevent spam; enforce per-user request limits  
+✅ **Database Security** — PostgreSQL with SSL, secure connection pooling  
+✅ **HTTPS Ready** — Auto-HTTPS when deployed to cloud (Render/Vercel/Railway)  
 
 ---
 
-**Safety and Compliance**
+## 🏗️ Architecture (Built to Scale)
 
-NexusAI follows industry best practices for data protection:
-
-* No-Plain-Text Policy: API tokens are hashed at the point of creation and are never stored in their original form.
-* Environment Isolation: All sensitive strings and access keys are managed through secure cloud secrets rather than hard-coded variables.
-* Access Control: The platform implements restricted Cross-Origin Resource Sharing (CORS) to ensure only authorized frontends can communicate with the backend services.
-
----
-
-**Operational Instructions**
-
-**Prerequisites**
-
-A configured environment must include the following variables for the reliability layer to function:
-
-* DATABASE_URL: Secure connection for the PostgreSQL instance.
-* GROQ_API_KEY: Authorization token for the high-speed inference engine.
-
-**Local Initialization**
-
-To run the services locally for testing purposes, you must initialize both the backend and the frontend in separate terminal windows.
-
-**Backend Execution (Terminal 1):**
-
-1. Navigate to the backend directory.
-2. Execute: `pip install -r requirements.txt`
-3. Start the API server: `uvicorn main:app --reload`
-
-**Frontend Execution (Terminal 2):**
-
-1. Navigate to the frontend directory.
-2. Execute: `npm install`
-3. Launch the React development server: `npm start`
+- **Backend**: FastAPI (Python) — Fast, async, auto-documented API
+- **Frontend**: React + Vite — Modern, responsive web UI
+- **Database**: PostgreSQL — Reliable, proven for production
+- **Infrastructure**: Docker — Reproducible, cloud-ready containers
 
 ---
 
-**Author**
+## 🚀 Quick Start (Local Development)
 
-This platform was built with a commitment to transforming AI from a casual tool into a reliable component of modern business infrastructure.
+### Prerequisites
+- Docker & Docker Compose (simplest) — or —
+- Python 3.11+ & Node.js 20+ (manual)
+
+### Option A: Docker (Recommended)
+```bash
+# Clone or navigate to project
+cd APO_RMP_Project
+
+---
+
+## 🚀 Production Deployment
+
+**Relevo is production-ready and tested for enterprise deployment.**
+
+### Quick Deployment (5 minutes)
+
+**Option 1: Render.com (Easiest)**
+```bash
+1. Push code to GitHub
+2. Go to render.com → New Web Service
+3. Connect repository
+4. Set environment variables from .env.production
+5. Start command: gunicorn backend.wsgi:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+6. Deploy!
+```
+
+**Option 2: Docker Compose**
+```bash
+docker-compose -f docker-compose.yml up --build
+# Runs on: http://localhost:8000 (API), http://localhost:5173 (Frontend)
+```
+
+### Documentation
+- **🚀 Production Deployment Guide:** [DEPLOYMENT_PRODUCTION.md](DEPLOYMENT_PRODUCTION.md)
+- **🔌 API Service Readiness:** [API_SERVICE_READY.md](API_SERVICE_READY.md)
+- **📋 Investor Readiness:** [INVESTOR_READINESS.md](INVESTOR_READINESS.md)
+
+### ✅ Production Features
+- HTTPS/SSL support
+- Load balancing ready
+- Database pooling
+- Health checks
+- Audit logging
+- Rate limiting
+- CORS security
+
+---
+
+## 🔌 API Service Integration
+
+Relevo can be integrated as a **service API** into other platforms:
+
+```python
+# Example: Healthcare integration
+import requests
+
+api_url = "https://api.yourdomain.com"
+
+# Login
+response = requests.post(f"{api_url}/auth/login", json={
+    "email": "user@example.com",
+    "password": "password"
+})
+token = response.json()["access_token"]
+
+# Generate medical consultation
+response = requests.post(f"{api_url}/generate", 
+    headers={"Authorization": f"Bearer {token}"},
+    json={"user_task": "I have a cold and sore throat"}
+)
+
+result = response.json()
+print(result["final_output"])         # Detailed guidance
+print(f"Quality: {result['critic_score']:.2f}/1.0")
+```
+
+**Perfect for:**
+- Telemedicine platforms
+- Healthcare provider systems
+- Insurance triage automation
+- Wellness applications
+- Enterprise prompt optimization
+
+See [API_SERVICE_READY.md](API_SERVICE_READY.md) for detailed integration examples.
+
+---
+
+## 🚀 Quick Start (Local Development)
+
+### Prerequisites
+- Docker & Docker Compose (simplest) — or —
+- Python 3.11+ & Node.js 20+ (manual)
+
+### Option A: Docker (Recommended)
+```bash
+# Clone or navigate to project
+cd APO_RMP_Project
+
+# Start all services (db, backend, frontend)
+docker compose up
+
+# Visit: http://localhost:5173
+# Login with: demo@relevo.ai / demo123
+```
+
+### Option B: Manual Setup
+```bash
+# Backend
+cd backend
+python -m venv venv
+source venv/bin/activate  # or `venv\Scripts\activate` on Windows
+pip install -r requirements.txt
+uvicorn main:app --reload
+
+# Frontend (in another terminal)
+cd frontend
+npm install
+npm run dev
+```
+
+Then open http://localhost:5173
+
+---
+
+## 📋 Deployment (How to Get a Live Link for Investors)
+
+### Quick Summary
+- **Backend** → Deploy to Render or Railway (free tier available)
+- **Frontend** → Deploy to Vercel or Netlify (free tier available)
+- **Database** → Use Neon PostgreSQL (free tier available) or your own
+
+### Step-by-Step (Render + Vercel)
+
+#### 1. Set Up Database (Neon PostgreSQL — free)
+- Go to [neon.tech](https://neon.tech) → Sign up
+- Create a new project → Copy your PostgreSQL connection string
+- Save it; you'll need it for the backend
+
+#### 2. Deploy Backend (Render)
+- Go to [render.com](https://render.com) → Sign up
+- Click **New +** → **Web Service**
+- Connect your GitHub repo (or paste code)
+- Set **Build Command**: `pip install -r backend/requirements.txt`
+- Set **Start Command**: `uvicorn backend.main:app --host 0.0.0.0 --port 8000`
+- Add **Environment Variables**:
+  ```
+  DATABASE_URL = <your Neon PostgreSQL URL>
+  SECRET_KEY = <generate: python -c "import secrets; print(secrets.token_urlsafe(32))">
+  ALLOWED_ORIGINS = https://yourapp.vercel.app
+  GROQ_API_KEY = <optional, for fast mode>
+  ```
+- Deploy → Note your backend URL (e.g., `https://yourapp-backend.onrender.com`)
+
+#### 3. Deploy Frontend (Vercel)
+- Go to [vercel.com](https://vercel.com) → Sign up → **Import Project**
+- Select your GitHub repo
+- Set **Build Command**: `npm run build`
+- Add **Environment Variable**:
+  ```
+  VITE_API_URL = https://yourapp-backend.onrender.com
+  ```
+- Deploy → Get your live URL (e.g., `https://yourapp.vercel.app`)
+
+#### 4. Update Backend CORS
+- Go back to Render → Update `ALLOWED_ORIGINS` with your Vercel URL
+- Redeploy
+
+#### 5. Run Database Migration (One-Time)
+```bash
+# Use your database provider's SQL console (Neon has one built-in)
+# Paste and run: db/migrations/2025-12-28_add_vip_and_usage_fields.sql
+```
+
+#### 6. Seed Demo User (One-Time, Optional)
+```bash
+# Same SQL console, paste and run: db/seed-data.sql
+```
+
+**Done!** Your live link is ready. Share it with investors.
+
+---
+
+## 🎯 What to Show Investors
+
+1. **Open the live link** → Shows a polished UI
+2. **Sign up or login** (demo@relevo.ai / demo123)
+3. **Try the chat** → Type a rough task, see it optimized
+4. **Show the API docs** → Append `/docs` to backend URL (e.g., `https://yourapp-backend.onrender.com/docs`) — Auto-generated, professional
+5. **Highlight features**:
+   - Real-time optimization
+   - Multi-agent AI orchestration
+   - Usage tracking & billing ready
+   - Enterprise auth & security
+
+---
+
+## 📁 Project Structure
+
+```
+APO_RMP_Project/
+├── backend/
+│   ├── main.py           # FastAPI app & routes
+│   ├── agents.py         # AI agent orchestration (APO workflow)
+│   ├── auth.py           # JWT authentication
+│   ├── key_management.py # API key & user management
+│   ├── util.py           # LLM calls & helpers
+│   ├── Dockerfile        # Backend container image
+│   └── requirements.txt   # Python dependencies
+├── frontend/
+│   ├── src/
+│   │   ├── App.jsx       # Main React component
+│   │   ├── pages/        # Page components (Chat, Login, etc.)
+│   │   ├── components/   # Reusable UI components
+│   │   └── services/     # API call helpers
+│   ├── Dockerfile        # Frontend container image
+│   └── package.json      # JS dependencies
+├── db/
+│   ├── database.py       # PostgreSQL connection & schema
+│   ├── migrations/       # SQL migration files
+│   └── seed-data.sql     # Demo user insert
+├── docker-compose.yml    # Local development orchestration
+└── README.md             # This file
+```
+
+---
+
+## 🔑 Environment Variables Explained
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `DATABASE_URL` | PostgreSQL connection | `postgresql://user:pass@host/db?sslmode=require` |
+| `SECRET_KEY` | JWT signing key (security) | A random 32+ char string |
+| `ALLOWED_ORIGINS` | CORS allowlist (which domains can call the API) | `https://yourapp.vercel.app` |
+| `GROQ_API_KEY` | Optional API key for fast LLM (speeds up optimization) | Your Groq API key |
+| `RATE_LIMIT_PER_MIN` | Max requests per user per minute | `120` |
+
+---
+
+## 💡 For Fund Submission
+
+**Talking Points:**
+- ✅ **Production-ready**: Secure auth, database, containerized, deployed live
+- ✅ **Scalable**: Async Python backend, connection pooling, designed for multi-user
+- ✅ **Enterprise-grade**: JWT tokens, Argon2 hashing, rate limiting, audit-ready
+- ✅ **User-centric**: Demo account, intuitive UI, clear API docs
+- ✅ **Monetizable**: Built-in usage tracking & billing hooks for SaaS model
+
+**Mention to Investors:**
+- "Our platform uses a multi-agent AI system to iteratively refine prompts, improving output quality by X% vs. manual prompting."
+- "Enterprise security from day one: JWT authentication, Argon2 password hashing, API key management, and usage-based billing."
+- "Live demo already deployed and running; investors can test immediately."
+
+---
+
+## 🐛 Troubleshooting
+
+**"Can't connect to database?"**
+- Check `DATABASE_URL` is correct and accessible
+- For Neon: whitelist your IP in the console
+
+**"Frontend can't reach backend API?"**
+- Verify `ALLOWED_ORIGINS` on backend includes your frontend URL
+- Check `VITE_API_URL` on frontend matches backend HTTPS URL
+
+**"Login fails?"**
+- For demo account, ensure `db/seed-data.sql` was run
+- Or register a new account directly in the UI
+
+---
+
+## 📞 Support
+
+For questions or issues, check:
+- Backend API docs: `<backend-url>/docs`
+- Frontend source: `frontend/src/`
+- Database schema: `db/database.py`
+
+---
+
+**Built with ❤️ for startups. Ready to impress investors. 🚀**

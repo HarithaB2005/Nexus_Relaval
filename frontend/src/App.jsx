@@ -1,33 +1,35 @@
-// /frontend/src/App.jsx (UPDATED)
+// /frontend/src/App.jsx
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
-import ChatPage from './pages/ChatPage'; // Assuming this is your main app page
-import NotFoundPage from './pages/NotFoundPage'; // Good practice for 404
+import ChatPage from './pages/ChatPage';
+import UsagePage from './pages/UsagePage';
+import BillingPage from './pages/BillingPage';
+import NotFoundPage from './pages/NotFoundPage';
 import { AuthProvider } from './components/AuthProvider';
-import ProtectedRoute from './components/ProtectedRoute'; // Import the new component
+import ProtectedRoute from './components/ProtectedRoute';
 
 function App() {
     return (
         <Router>
-            {/* Wrap the entire application in the AuthProvider */}
             <AuthProvider>
                 <Routes>
-                    {/* Public Routes */}
+                    {/* Public Access */}
                     <Route path="/login" element={<LoginPage />} />
                     <Route path="/register" element={<RegisterPage />} />
                     
-                    {/* Protected Routes: Only accessible if authenticated */}
+                    {/* Security Wrapper for Private Access */}
                     <Route element={<ProtectedRoute />}>
-                        <Route path="/" element={<DashboardPage />} /> {/* Redirect '/' to dashboard */}
+                        <Route path="/" element={<Navigate to="/dashboard" replace />} />
                         <Route path="/dashboard" element={<DashboardPage />} />
                         <Route path="/chat" element={<ChatPage />} />
-                        {/* Add more protected routes here */}
+                        <Route path="/usage" element={<UsagePage />} />
+                        <Route path="/billing" element={<BillingPage />} />
                     </Route>
 
-                    {/* Fallback route */}
+                    {/* Fallback */}
                     <Route path="*" element={<NotFoundPage />} />
                 </Routes>
             </AuthProvider>

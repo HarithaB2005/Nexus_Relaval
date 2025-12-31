@@ -1,9 +1,12 @@
-// /frontend/src/components/AuthProvider.jsx (NEW FILE)
-import React, { createContext, useContext, useState, useMemo, useEffect } from 'react';
+// /frontend/src/components/AuthProvider.jsx
+import React, { createContext, useContext, useState, useMemo, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
-// API Configuration
-const API_BASE_URL = 'http://localhost:8000';
+// Corrected for browser compatibility: Vite/Modern ESM uses import.meta.env
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+// Ensure all axios calls (including relative ones in components) target the API
+axios.defaults.baseURL = API_BASE_URL;
 
 // 1. Create the Context
 const AuthContext = createContext();
@@ -16,7 +19,7 @@ export const AuthProvider = ({ children }) => {
     const [isLoading, setIsLoading] = useState(true);
 
     // Function to set the token and update localStorage/Axios defaults
-    const setToken = (newToken) => {
+    const setToken = useCallback((newToken) => {
         setToken_(newToken);
         if (newToken) {
             localStorage.setItem('access_token', newToken);
@@ -26,27 +29,37 @@ export const AuthProvider = ({ children }) => {
             delete axios.defaults.headers.common["Authorization"];
             setCurrentUser(null);
         }
-    };
+    }, []);
+
+    // 3. refreshUser Function: Critical for Pitch Redemptions
+    // Re-fetches user data from /auth/me to update global state (usage, VIP status, etc.)
+    const refreshUser = useCallback(async () => {
+        if (!token) return;
+        try {
+            const response = await axios.get(`${API_BASE_URL}/auth/me`);
+            setCurrentUser(response.data);
+            return response.data;
+        } catch (error) {
+            console.error("Failed to refresh user session:", error);
+            if (error.response?.status === 401) {
+                setToken(null);
+            }
+        }
+    }, [token, setToken]);
 
     // Effect to fetch user data on token change or initial load
     useEffect(() => {
-        const fetchUser = async () => {
+        const initAuth = async () => {
             setIsLoading(true);
             if (token) {
-                try {
-                    // Use the /auth/me endpoint to validate the token and get user data
-                    const response = await axios.get(`${API_BASE_URL}/auth/me`);
-                    setCurrentUser(response.data);
-                } catch (error) {
-                    console.error("Token validation failed, logging out:", error);
-                    setToken(null); // Invalid token, force logout
-                }
+                // Set default header immediately if token exists in localStorage
+                axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
+                await refreshUser();
             }
             setIsLoading(false);
         };
-        fetchUser();
-    }, [token]);
-
+        initAuth();
+    }, [token, refreshUser]);
 
     // Context value memoization
     const contextValue = useMemo(
@@ -55,37 +68,37 @@ export const AuthProvider = ({ children }) => {
             currentUser,
             isLoading,
             setToken,
-            // Simplified Login and Logout for clarity, actual logic is in LoginPage/DashboardPage
-            login: (token) => setToken(token),
+            refreshUser, // Exposed so PromoModal can call it
+            login: (newToken, userData) => {
+                setToken(newToken);
+                if (userData) setCurrentUser(userData);
+            },
             logout: () => setToken(null),
         }),
-        [token, currentUser, isLoading]
+        [token, currentUser, isLoading, setToken, refreshUser]
     );
 
-    // 3. Global Axios Interceptor for 401 Unauthorized errors
+    // 4. Global Axios Interceptor for 401 Unauthorized errors
     useEffect(() => {
         const interceptor = axios.interceptors.response.use(
             (response) => response,
             (error) => {
-                // If response is 401 (Unauthorized) and we have a token, it means the token expired
+                // If the backend returns 401, clear the token and trigger logout
                 if (error.response?.status === 401 && token) {
-                    // Clear the token and force user to log in again
                     setToken(null);
-                    // You might want to redirect to '/login' here
                 }
                 return Promise.reject(error);
             }
         );
         return () => axios.interceptors.response.eject(interceptor);
-    }, [token]);
-
+    }, [token, setToken]);
 
     return (
         <AuthContext.Provider value={contextValue}>
-            {/* Show a loading state while checking token */}
             {isLoading ? (
-                <div className="flex justify-center items-center h-screen text-lg">
-                    Loading User Session...
+                <div className="flex flex-col justify-center items-center h-screen bg-[#0f172a] text-white">
+                    <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500 mb-4"></div>
+                    <div className="text-lg font-medium">Validating Session...</div>
                 </div>
             ) : (
                 children
@@ -94,7 +107,11 @@ export const AuthProvider = ({ children }) => {
     );
 };
 
-// 4. Custom Hook to use the context
+// 5. Custom Hook to use the context
 export const useAuth = () => {
-    return useContext(AuthContext);
+    const context = useContext(AuthContext);
+    if (!context) {
+        throw new Error("useAuth must be used within an AuthProvider");
+    }
+    return context;
 };

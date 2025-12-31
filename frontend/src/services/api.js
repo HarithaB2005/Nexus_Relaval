@@ -1,46 +1,62 @@
 // src/services/api.js
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8000'; // Target your FastAPI server
+// Use Vite environment for API URL, fallback to localhost
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-// --- 1. Registration (Unauthenticated) ---
-export const registerClient = async (name, email) => {
+// --- 1. Registration (JWT flow) ---
+export const registerClient = async (name, email, password) => {
     try {
-        const response = await axios.post(`${API_BASE_URL}/register`, {
-            client_name: name,
-            client_email: email,
+        const response = await axios.post(`${API_BASE_URL}/auth/register`, {
+            name,
+            email,
+            password,
         });
-        return response.data; // Should contain { client_id, api_key, message }
+        return response.data; // { access_token, token_type, user }
     } catch (error) {
-        throw error.response?.data?.detail || "Registration failed due to server error.";
+        throw error.response?.data?.detail || 'Registration failed due to server error.';
     }
 };
 
-// --- 2. Generation (Authenticated) ---
-export const generateContent = async (apiKey, requestData) => {
-    if (!apiKey) {
-        throw "API Key is missing. Please sign in or register.";
-    }
-    
-    // The requestData must strictly match the APORequest Pydantic model
+// --- 2A. Generation for logged-in users (JWT Protected) ---
+// Relies on axios default Authorization header set by AuthProvider
+export const generateContent = async (requestData) => {
     const payload = {
         messages: requestData.messages,
-        document_context: requestData.documentContext || null, 
-        video_url: requestData.videoUrl || null,             
+        document_context: requestData.documentContext || null,
         max_iterations: requestData.maxIterations,
         quality_threshold: requestData.qualityThreshold,
     };
 
     try {
         const response = await axios.post(`${API_BASE_URL}/generate`, payload, {
+            headers: { 'Content-Type': 'application/json' },
+        });
+        return response.data; // APOResponse
+    } catch (error) {
+        throw error.response?.data?.detail || error.message || 'Unknown API call error.';
+    }
+};
+
+// --- 2B. Generation for external clients (API Key Protected) ---
+export const generateWithApiKey = async (apiKey, requestData) => {
+    if (!apiKey) throw 'API Key is missing';
+    const payload = {
+        messages: requestData.messages,
+        document_context: requestData.documentContext || null,
+        max_iterations: requestData.maxIterations,
+        quality_threshold: requestData.qualityThreshold,
+    };
+
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/v1/generate-prompt`, payload, {
             headers: {
                 'Content-Type': 'application/json',
-                'X-APO-Key': apiKey, 
+                Authorization: `Bearer ${apiKey}`,
             },
         });
-        return response.data; // Returns APOResponse schema
+        return response.data; // APOResponse
     } catch (error) {
-        // Return detailed backend error messages (401 Unauthorized, 429 Rate Limit)
-        throw error.response?.data?.detail || error.message || "Unknown API call error.";
+        throw error.response?.data?.detail || error.message || 'Unknown API call error.';
     }
 };

@@ -1,158 +1,164 @@
-# /backend/key_management.py (FINAL, COMPLETE and CORRECTED)
-
 import asyncpg
-from typing import Dict, Any, Optional
-from passlib.context import CryptContext
 import uuid
 import hashlib
-# REMOVED: from passlib.exc import InvalidSecretError 
+import secrets
+import logging
+import json
+from typing import Dict, Any, Optional
+from passlib.context import CryptContext
 
-# Define the password hashing scheme
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Password hashing configuration
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+logger = logging.getLogger("Nexus-KeyManager")
 
-# --- Password Hashing Functions ---
-def _truncate_password(password: str) -> str:
-    """Helper to truncate password to 72 bytes for bcrypt."""
-    truncated_password = password.encode('utf-8')[:72]
-    # Decode back to string (passlib expects a string/text input)
-    return truncated_password.decode('utf-8', 'ignore')
+# ==========================================================
+# ==================== KEY UTILITIES =======================
+# ==========================================================
 
-def hash_password(password: str) -> str:
-    """
-    Hashes a plain text password using bcrypt. 
-    CRITICAL FIX: Truncates password to 72 bytes to prevent ValueError.
-    """
-    truncated_password_str = _truncate_password(password)
-    return pwd_context.hash(truncated_password_str)
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    Verifies a plain password against a hashed password.
-    CRITICAL FIX: Truncates plain_password for verification consistency.
-    """
-    truncated_password_str = _truncate_password(plain_password)
-
-    try:
-        return pwd_context.verify(truncated_password_str, hashed_password)
-    except Exception:
-        # Catch unexpected errors during verification
-        return False
-
-# --- API Key Hashing ---
 def generate_raw_api_key() -> str:
-    """Generates a secure, 32-character hexadecimal API key with a prefix."""
-    import secrets
-    KEY_PREFIX = "apo_sk_" 
-    return f"{KEY_PREFIX}{secrets.token_hex(16)}"
+    """Generates a secure, prefix-based raw API key."""
+    return f"relevo_sk_{secrets.token_hex(16)}"
 
 def generate_api_key_hash(key: str) -> str:
-    """Hashes a raw API key using SHA-256 for storage."""
+    """Creates a SHA-256 hash of the API key for secure storage."""
     return hashlib.sha256(key.encode('utf-8')).hexdigest()
 
-# --- Registration Function (Uses Email/Password) ---
+# ==========================================================
+# ==================== AUTH & REGISTRATION =================
+# ==========================================================
+
 async def register_new_user(email: str, password: str, name: str, db_pool) -> Optional[Dict[str, Any]]:
-    """Registers a new user with hashed password."""
-    hashed_pass = hash_password(password) 
+    """Registers a user and initializes enterprise fields."""
+    hashed_pass = pwd_context.hash(password)
     client_id = str(uuid.uuid4())
+    initial_raw = generate_raw_api_key()
+    initial_hash = generate_api_key_hash(initial_raw)
     
-    try:
-        async with db_pool.acquire() as connection:
-            # 1. Check if email already exists
-            existing_user = await connection.fetchval(
-                "SELECT client_id FROM client_credentials WHERE client_email = $1", 
-                email
-            )
-            if existing_user:
-                return None 
-
-            # 2. Insert new user with hashed password (Requires 'password_hash' column)
-            result = await connection.fetchrow(
-                """
-                INSERT INTO client_credentials (client_id, client_name, client_email, password_hash, status)
-                VALUES ($1, $2, $3, $4, 'active')
-                RETURNING client_id, client_name, client_email;
-                """,
-                client_id, name, email, hashed_pass
-            )
-            return dict(result) if result else None
+    default_limits = {
+        "current_usage": 0, 
+        "billing_active": False, 
+        "is_vip": False
+    }
+    
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            exists = await conn.fetchval("SELECT client_id FROM client_credentials WHERE client_email = $1", email)
+            if exists: 
+                return None
             
-    except Exception as e:
-        print(f"Database error during registration: {e}")
-        return None
-
-# --- Authentication Function (Uses Email/Password) ---
-async def authenticate_user(email: str, password: str, db_pool) -> Optional[Dict[str, Any]]:
-    """Authenticates user using email and password."""
-    try:
-        async with db_pool.acquire() as connection:
-            # 1. Fetch user data and password hash by email
-            user_data = await connection.fetchrow(
-                """
-                SELECT client_id, client_email, password_hash, client_name, status
-                FROM client_credentials 
-                WHERE client_email = $1 AND status = 'active'
-                """, 
-                email
+            res = await conn.fetchrow(
+                """INSERT INTO client_credentials 
+                   (client_id, client_name, client_email, password_hash, status, is_admin, usage_limits, plan_limit) 
+                   VALUES ($1, $2, $3, $4, 'active', FALSE, $5::jsonb, 50) 
+                   RETURNING client_id, client_name, client_email, is_admin, usage_limits, plan_limit""",
+                client_id, name, email, hashed_pass, json.dumps(default_limits)
             )
             
-            if user_data:
-                # 2. Verify the provided password against the stored hash
-                if verify_password(password, user_data['password_hash']): 
-                    user_dict = dict(user_data)
-                    del user_dict['password_hash'] 
-                    return user_dict
-                    
-    except Exception as e:
-        print(f"Database error during authentication: {e}")
-        
+            await conn.execute(
+                "INSERT INTO api_keys (key_id, client_id, api_key_hash, revoked) VALUES ($1, $2, $3, FALSE)",
+                str(uuid.uuid4()), client_id, initial_hash
+            )
+            
+            if res:
+                data = dict(res)
+                data['raw_key'] = initial_raw
+                if isinstance(data['usage_limits'], str):
+                    data['usage_limits'] = json.loads(data['usage_limits'])
+                return data
     return None
 
-# --- Function for Dashboard API Key Generation (Needs DB Pool) ---
-async def create_new_api_key(client_id: str, db_pool) -> Dict[str, str]:
-    """Generates a new API key for an existing client and updates the DB."""
-    raw_key = generate_raw_api_key()
-    hashed_key = generate_api_key_hash(raw_key)
+async def authenticate_user(email: str, password: str, db_pool) -> Optional[Dict[str, Any]]:
+    """Authenticates and parses JSONB for the response."""
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow(
+            """SELECT client_id, client_name, client_email, password_hash, is_admin, usage_limits, plan_limit 
+               FROM client_credentials WHERE client_email = $1""", 
+            email
+        )
+        if user and pwd_context.verify(password, user['password_hash']):
+            u_dict = dict(user)
+            u_dict.pop('password_hash')
+            if isinstance(u_dict['usage_limits'], str):
+                u_dict['usage_limits'] = json.loads(u_dict['usage_limits'])
+            return u_dict
+    return None
 
-    sql = """
-    UPDATE client_credentials 
-    SET api_key_hash = $2, last_access = NOW()
-    WHERE client_id = $1;
-    """
-    async with db_pool.acquire() as connection:
-        await connection.execute(sql, client_id, hashed_key)
+# ==========================================================
+# ==================== USAGE & LIMITS ======================
+# ==========================================================
 
-    return {"raw_key": raw_key}
-
-# --- API Key Validation Function (NEW) ---
-async def validate_api_key(api_key: str, db_pool) -> Optional[Dict[str, Any]]:
-    """
-    Validates a raw API key against the stored hash in the database.
-    Returns user data if valid, None otherwise.
-    """
-    # 1. Generate the hash of the incoming key
-    incoming_key_hash = generate_api_key_hash(api_key)
-
-    try:
-        async with db_pool.acquire() as connection:
-            # 2. Look up user by the hashed key
-            user_data = await connection.fetchrow(
-                """
-                SELECT client_id, client_name, client_email
-                FROM client_credentials 
-                WHERE api_key_hash = $1 AND status = 'active'
-                """, 
-                incoming_key_hash
-            )
-            
-            # 3. If found, update last_access and return user info
-            if user_data:
-                await connection.execute(
-                    "UPDATE client_credentials SET last_access = NOW() WHERE client_id = $1",
-                    user_data['client_id']
+async def increment_usage_count(client_id: str, db_pool, tokens_used: int = 0, cost_usd: float = 0.0):
+    """Records usage in both new tracking table (primary) and legacy JSONB (backward compat)."""
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            # 1. Write to new usage_tracking table (primary tracking system)
+            try:
+                await conn.execute(
+                    """
+                    INSERT INTO usage_tracking (client_id, requests_count, tokens_count, cost_usd)
+                    VALUES ($1, 1, $2, $3)
+                    """,
+                    client_id, tokens_used, cost_usd
                 )
-                return dict(user_data)
+            except Exception as e:
+                logger.warning(f"Failed to insert into usage_tracking: {e}")
             
-    except Exception as e:
-        print(f"Database error during API key validation: {e}")
-        
+            # 2. Keep JSONB update for backward compatibility with existing code
+            try:
+                await conn.execute(
+                    """
+                    UPDATE client_credentials 
+                    SET usage_limits = usage_limits || jsonb_build_object(
+                        'current_usage', to_jsonb(COALESCE((usage_limits->>'current_usage')::int, 0) + 1),
+                        'tokens_used',  to_jsonb(COALESCE((usage_limits->>'tokens_used')::bigint, 0) + $2),
+                        'cost_usd',     to_jsonb(COALESCE((usage_limits->>'cost_usd')::numeric, 0) + $3)
+                    )
+                    WHERE client_id = $1
+                    """,
+                    client_id, tokens_used, cost_usd
+                )
+            except Exception as e:
+                logger.warning(f"Failed to update client_credentials usage_limits: {e}")
+
+async def grant_vip_access(client_id: str, db_pool):
+    """Force-injects is_vip status."""
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            """UPDATE client_credentials 
+               SET usage_limits = usage_limits || '{"is_vip": true}'::jsonb
+               WHERE client_id = $1""", 
+            client_id
+        )
+
+# ==========================================================
+# ==================== KEY MANAGEMENT ======================
+# ==========================================================
+
+async def create_new_api_key(client_id: str, db_pool) -> Dict[str, str]:
+    """Generates and stores a new API key."""
+    raw = generate_raw_api_key()
+    hashed = generate_api_key_hash(raw)
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO api_keys (key_id, client_id, api_key_hash, revoked) VALUES ($1, $2, $3, FALSE)",
+            str(uuid.uuid4()), client_id, hashed
+        )
+    return {"raw_key": raw}
+
+async def validate_api_key(api_key: str, db_pool) -> Optional[Dict[str, Any]]:
+    """Validates key and returns associated client context."""
+    h = generate_api_key_hash(api_key)
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow(
+            """SELECT u.client_id, u.is_admin, u.client_email, u.usage_limits, u.plan_limit 
+               FROM client_credentials u 
+               JOIN api_keys k ON u.client_id = k.client_id
+               WHERE k.api_key_hash = $1 AND k.revoked = FALSE AND u.status = 'active'""", 
+            h
+        )
+        if user:
+            u_dict = dict(user)
+            if isinstance(u_dict['usage_limits'], str):
+                u_dict['usage_limits'] = json.loads(u_dict['usage_limits'])
+            return u_dict
     return None
