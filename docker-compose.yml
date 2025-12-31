@@ -3,9 +3,9 @@ services:
   db:
     image: postgres:15
     environment:
-      POSTGRES_DB: relevo
-      POSTGRES_USER: relevo
-      POSTGRES_PASSWORD: relevo
+      POSTGRES_DB: ${POSTGRES_DB:-relevo}
+      POSTGRES_USER: ${POSTGRES_USER:-relevo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-relevo_dev_password}
     ports:
       - "5432:5432"
     volumes:
