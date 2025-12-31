@@ -4,7 +4,7 @@
 
 ## 🎯 What It Does (In Plain English)
 
-Relevo is a web app that takes your rough ideas or tasks and **automatically refines them into perfect prompts** using multiple AI agents working together. Think of it as a "prompt polisher"—it:
+Relevo is a  API as a Service that takes your rough ideas or tasks and **automatically refines them into perfect prompts** using multiple AI agents working together. Think of it as a "prompt polisher"—it:
 
 1. **Understands your intent** — What are you really asking for?
 2. **Optimizes your prompt** — Rewrites it to get the best result from AI models.
