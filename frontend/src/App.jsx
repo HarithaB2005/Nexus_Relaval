@@ -7,6 +7,8 @@ import DashboardPage from './pages/DashboardPage';
 import ChatPage from './pages/ChatPage';
 import UsagePage from './pages/UsagePage';
 import BillingPage from './pages/BillingPage';
+import AuditPage from './pages/AuditPage';
+import PrivacyPage from './pages/PrivacyPage';
 import NotFoundPage from './pages/NotFoundPage';
 import { AuthProvider } from './components/AuthProvider';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -27,6 +29,8 @@ function App() {
                         <Route path="/chat" element={<ChatPage />} />
                         <Route path="/usage" element={<UsagePage />} />
                         <Route path="/billing" element={<BillingPage />} />
+                        <Route path="/audit" element={<AuditPage />} />
+                        <Route path="/privacy" element={<PrivacyPage />} />
                     </Route>
 
                     {/* Fallback */}

@@ -209,7 +209,7 @@ async def call_llm_with_gemini(prompt_to_send: str, is_meta_prompt: bool = True)
     return None
 
 async def call_llm(prompt_to_send: str, is_meta_prompt: bool = True) -> str:
-    """Unified LLM call with Gemini (primary) -> Groq (fallback) -> Ollama (final fallback)."""
+    """Unified LLM call with Gemini -> Groq -> Ollama."""
     max_tokens = 900 if is_meta_prompt else 4000  # Extended max for better long-form response
 
     # 1. Try Gemini first (best for long-form responses and quality)

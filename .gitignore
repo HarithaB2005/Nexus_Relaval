@@ -1,51 +1,76 @@
-# Ignore environment files
-.env
-.env.local
-.env.*.local
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+*.pyc
 
-# Ignore IDE & OS files
+# Virtual Environments
+venv/
+ENV/
+env/
+.venv
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# OS
 .DS_Store
 Thumbs.db
 
-# Ignore build & dependency artifacts
-backend/__pycache__/
-backend/*.pyc
-backend/venv/
-backend/.venv/
-frontend/node_modules/
-frontend/dist/
-frontend/.next/
+# Build artifacts
+dist/
+build/
+*.egg-info/
 
-# Ignore user uploads
-backend/uploads/
-*.mp4
-*.webm
-*.mov
-*.avi
+# Cache
+.pytest_cache/
+.coverage
+.cache/
 
-# Ignore logs
-*.log
-logs/
-
-# Ignore secrets & credentials
-*.key
-*.pem
-*.pub
-secrets/
-.env.production
-api_keys.txt
+# Sensitive
 auth.json
-backend/auth.json
+auth.py (keep source, but ensure secrets aren't committed)
+settings.json (keep source, but ensure secrets aren't committed)
 
-# Ignore local-only folder (contains sensitive files)
-local-only/
-
-# Ignore temporary files
-*.tmp
-*.bak
-*.cache
+# Docker
+.dockerignore

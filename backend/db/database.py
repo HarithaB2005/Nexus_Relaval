@@ -122,6 +122,168 @@ async def startup_db_pool():
                         CREATE INDEX IF NOT EXISTS idx_invoices_client_date 
                         ON invoices(client_id, invoice_date DESC);
                     """)
+                    
+                    # ========================================
+                    # REGISTRY OF TRUTH (Governance Dashboard)
+                    # ========================================
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS governance_audit_events (
+                            event_id UUID PRIMARY KEY,
+                            client_id TEXT NOT NULL,
+                            event_type VARCHAR(50) NOT NULL,
+                            severity VARCHAR(20) NOT NULL,
+                            reason TEXT NOT NULL,
+                            input_preview TEXT,
+                            output_preview TEXT,
+                            metric_value NUMERIC(10, 4),
+                            metric_name VARCHAR(100),
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            created_date DATE DEFAULT CURRENT_DATE
+                        );
+                    """)
+                    
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS governance_saved_errors (
+                            error_id UUID PRIMARY KEY,
+                            client_id TEXT NOT NULL,
+                            error_category VARCHAR(100) NOT NULL,
+                            error_description TEXT NOT NULL,
+                            impact_level VARCHAR(20),
+                            times_blocked INTEGER DEFAULT 1,
+                            first_detected TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            last_detected TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                    """)
+                    
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS governance_summary (
+                            summary_id SERIAL PRIMARY KEY,
+                            client_id TEXT NOT NULL,
+                            summary_date DATE NOT NULL DEFAULT CURRENT_DATE,
+                            total_requests INTEGER DEFAULT 0,
+                            total_rejections INTEGER DEFAULT 0,
+                            hallucinations_blocked INTEGER DEFAULT 0,
+                            quality_issues_found INTEGER DEFAULT 0,
+                            safety_violations_detected INTEGER DEFAULT 0,
+                            avg_quality_score NUMERIC(5, 3),
+                            risk_score NUMERIC(5, 3),
+                            UNIQUE(client_id, summary_date)
+                        );
+                    """)
+                    
+                    # ========================================
+                    # PRIVACY-BY-DESIGN (Data Sovereignty)
+                    # ========================================
+                    # Add columns to client_credentials if they don't exist
+                    try:
+                        await conn.execute("""
+                            ALTER TABLE client_credentials 
+                            ADD COLUMN data_retention_mode VARCHAR(50) DEFAULT 'standard'
+                        """)
+                    except asyncpg.DuplicateColumnError:
+                        pass
+                    
+                    try:
+                        await conn.execute("""
+                            ALTER TABLE client_credentials 
+                            ADD COLUMN privacy_settings JSONB DEFAULT '{"log_usage": true, "log_inputs": false, "log_outputs": false, "encryption_at_rest": true}'::jsonb
+                        """)
+                    except asyncpg.DuplicateColumnError:
+                        pass
+                    
+                    try:
+                        await conn.execute("""
+                            ALTER TABLE client_credentials 
+                            ADD COLUMN local_inference_enabled BOOLEAN DEFAULT FALSE
+                        """)
+                    except asyncpg.DuplicateColumnError:
+                        pass
+                    
+                    try:
+                        await conn.execute("""
+                            ALTER TABLE client_credentials 
+                            ADD COLUMN local_inference_api_url VARCHAR(500)
+                        """)
+                    except asyncpg.DuplicateColumnError:
+                        pass
+                    
+                    try:
+                        await conn.execute("""
+                            ALTER TABLE client_credentials 
+                            ADD COLUMN zero_data_retention_enabled BOOLEAN DEFAULT FALSE
+                        """)
+                    except asyncpg.DuplicateColumnError:
+                        pass
+                    
+                    # Data Retention Policies Table
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS data_retention_policies (
+                            policy_id UUID PRIMARY KEY,
+                            client_id TEXT NOT NULL,
+                            policy_name VARCHAR(100) NOT NULL,
+                            retention_days INTEGER DEFAULT 30,
+                            applies_to VARCHAR(100) NOT NULL,
+                            deletion_schedule VARCHAR(50) DEFAULT 'immediate',
+                            is_active BOOLEAN DEFAULT TRUE,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                    """)
+                    
+                    # Local Inference Deployments Table
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS local_inference_deployments (
+                            deployment_id UUID PRIMARY KEY,
+                            client_id TEXT NOT NULL,
+                            deployment_name VARCHAR(255) NOT NULL,
+                            deployment_url VARCHAR(500) NOT NULL,
+                            api_key_hash VARCHAR(64),
+                            status VARCHAR(50) DEFAULT 'active',
+                            last_healthcheck TIMESTAMP WITH TIME ZONE,
+                            healthcheck_status VARCHAR(20) DEFAULT 'unknown',
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        );
+                    """)
+                    
+                    # Request Processing Mode Log
+                    await conn.execute("""
+                        CREATE TABLE IF NOT EXISTS request_processing_log (
+                            log_id UUID PRIMARY KEY,
+                            client_id TEXT NOT NULL,
+                            request_id UUID,
+                            processing_mode VARCHAR(50) NOT NULL,
+                            processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            data_retained BOOLEAN,
+                            retention_days INTEGER
+                        );
+                    """)
+                    
+                    # Create indexes for governance and privacy tables
+                    await conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_governance_audit_client_date 
+                        ON governance_audit_events(client_id, created_at DESC);
+                    """)
+                    
+                    await conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_saved_errors_client 
+                        ON governance_saved_errors(client_id);
+                    """)
+                    
+                    await conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_data_retention_active 
+                        ON data_retention_policies(client_id, is_active);
+                    """)
+                    
+                    await conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_local_inference_status 
+                        ON local_inference_deployments(client_id, status);
+                    """)
+                    
+                    await conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_processing_log_client_date 
+                        ON request_processing_log(client_id, processed_at DESC);
+                    """)
             
             logger.info("Enterprise Database Schema Verified and Pool Initialized.")
             return

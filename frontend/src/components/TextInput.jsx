@@ -11,7 +11,9 @@ const TextInput = ({ input, setInput, handleSend, isLoading, error, className = 
             )}
 
             <div className="flex items-center gap-3 max-w-4xl mx-auto">
+                <label htmlFor="chat-input" className="sr-only">Describe your objective</label>
                 <input
+                    id="chat-input"
                     type="text"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}

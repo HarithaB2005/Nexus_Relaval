@@ -49,7 +49,8 @@ const Message = ({ message, onContinueOptimization }) => {
                         {message.timestamp && <div className="text-[11px] text-slate-400">{message.timestamp}</div>}
                     </div>
 
-                    <div className="mt-2 whitespace-pre-wrap leading-relaxed text-sm text-slate-100 break-words max-h-[600px] overflow-y-auto scrollbar-thin scrollbar-thumb-slate-600">
+                    <div className="mt-2 whitespace-pre-wrap leading-relaxed text-sm text-slate-100 break-words max-h-[600px] overflow-y-auto scrollbar-thin scrollbar-thumb-slate-600"
+                         {...(typeof message.content === 'string' && message.content.includes('[Blocked by content safety filter]') ? { role: 'alert', 'aria-live': 'assertive' } : {})}>
                         {message.content}
                     </div>
 
@@ -127,7 +128,7 @@ const ChatWindow = ({ history, isLoading, onContinueOptimization }) => {
     }, [history, isLoading]);
 
     return (
-        <main className="flex-1 overflow-y-auto p-6 space-y-2 scrollbar-thin scrollbar-thumb-gray-700">
+        <main className="flex-1 overflow-y-auto p-6 space-y-2 scrollbar-thin scrollbar-thumb-gray-700" role="log" aria-live="polite" aria-relevant="additions text">
             {history.length === 0 && (
                 <div className="h-full flex flex-col items-center justify-center opacity-20 select-none">
                     <div className="text-6xl mb-4">⚡</div>

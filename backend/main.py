@@ -6,7 +6,7 @@ import os
 import sys
 import logging
 from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, HTTPException, Header, status, Depends, APIRouter, UploadFile, File
+from fastapi import FastAPI, HTTPException, Header, status, Depends, APIRouter
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, ValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,11 +17,7 @@ import uuid
 import time
 import math
 from starlette.requests import Request
-from starlette.responses import Response, FileResponse
-import mimetypes
-import PyPDF2
-import io
-import PyPDF2
+from starlette.responses import Response
 
 # Ensure project root is on sys.path when running from backend/ so imports like "db" resolve
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -47,9 +43,47 @@ from auth import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, get_current_u
 
 # >>> 1. ADD THE APO WORKFLOW IMPORT HERE <<<
 from agents import apo_workflow 
+from audit_logger import log_audit_event, get_audit_events, get_audit_summary, get_saved_errors
+
+# Import file upload support
+from fastapi import UploadFile, File
+import io
+try:
+    import PyPDF2
+except ImportError:
+    PyPDF2 = None
 
 # OAuth2 setup (required for the login endpoint)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+
+# =====================================================
+# SAFETY & MODERATION HELPER
+# =====================================================
+async def ensure_safe_or_reason(text: str) -> Optional[str]:
+    """
+    Check if input is safe for processing.
+    Returns None if safe, or reason if unsafe.
+    """
+    try:
+        # Simple safety checks (can be enhanced with ML model)
+        unsafe_patterns = [
+            "execute code",
+            "drop table",
+            "delete from",
+            "rm -rf",
+            "malware",
+            "exploit"
+        ]
+        
+        text_lower = text.lower()
+        for pattern in unsafe_patterns:
+            if pattern in text_lower:
+                return f"Blocked: Potentially unsafe pattern detected: '{pattern}'"
+        
+        return None  # Safe
+    except Exception as e:
+        logging.warning(f"Safety check error: {e}")
+        return None  # Fail open
 
 # ==========================================================
 # ======= ENVIRONMENT VALIDATION (STARTUP CHECK) ===========
@@ -488,6 +522,15 @@ async def generate_prompt_by_key(
     try:
         if not is_vip:
             if not _allow_request(_rate_key_for_user(user)):
+                # LOG AUDIT EVENT: Rate limit
+                await log_audit_event(
+                    client_id=str(user.get("client_id")),
+                    event_type="rate_limit",
+                    severity="low",
+                    reason="Rate limit exceeded (120 requests/minute)",
+                    input_preview=latest_user_task,
+                    metadata={"limit": "120/min"}
+                )
                 raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
 
             current_usage = int(user.get("usage_limits", {}).get("current_usage", 0))
@@ -495,15 +538,38 @@ async def generate_prompt_by_key(
             if current_usage >= plan_limit:
                 raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Plan limit exceeded")
 
+        # Use provided document context as-is
+        doc_context = request.document_context
+
         # >>> 2. CALL THE REAL APO WORKFLOW <<<
         results = await apo_workflow(
             full_context_history=full_context_history,
             abstract_task=latest_user_task,
-            document_context=request.document_context,
+            document_context=doc_context,
             max_iterations=request.max_iterations,
             quality_threshold=request.quality_threshold
         )
         # >>> END REAL WORKFLOW CALL <<<
+
+        # Governance: log quality rejects below S < 0.94
+        try:
+            score_val = float(results.get("critic_score", 0.0))
+            if score_val < 0.94:
+                await log_audit_event(
+                    client_id=str(user.get("client_id")),
+                    event_type="quality_reject",
+                    severity="medium",
+                    reason=f"Quality score below threshold ({score_val:.2f} < 0.94)",
+                    input_preview=latest_user_task,
+                    output_preview=(results.get("final_output") or "")[:500],
+                    metadata={
+                        "score": round(score_val, 3),
+                        "iterations": int(results.get("iterations", 0)),
+                        "threshold": 0.94
+                    }
+                )
+        except Exception:
+            pass
         
         # Increment usage after successful run
         try:
@@ -582,15 +648,50 @@ async def generate_optimized_content(
             if current_usage >= plan_limit:
                 raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Plan limit exceeded")
 
+        # Optional pre-input moderation
+        try:
+            reason = await ensure_safe_or_reason(latest_user_task)
+            if not reason and request.document_context:
+                reason = await ensure_safe_or_reason(request.document_context[:5000])
+            if reason:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+        # Get document context from request
+        doc_context = request.document_context
+
         # >>> 3. CALL THE REAL APO WORKFLOW <<<
         results = await apo_workflow(
             full_context_history=full_context_history,
             abstract_task=latest_user_task,
-            document_context=request.document_context,
+            document_context=doc_context,
             max_iterations=request.max_iterations,
             quality_threshold=request.quality_threshold
         )
         # >>> END REAL WORKFLOW CALL <<<
+
+        # Governance: log quality rejects below S < 0.94
+        try:
+            score_val = float(results.get("critic_score", 0.0))
+            if score_val < 0.94:
+                await log_audit_event(
+                    client_id=str(current_user.get("client_id")),
+                    event_type="quality_reject",
+                    severity="medium",
+                    reason=f"Quality score below threshold ({score_val:.2f} < 0.94)",
+                    input_preview=latest_user_task,
+                    output_preview=(results.get("final_output") or "")[:500],
+                    metadata={
+                        "score": round(score_val, 3),
+                        "iterations": int(results.get("iterations", 0)),
+                        "threshold": 0.94
+                    }
+                )
+        except Exception:
+            pass
         
         # Increment usage after successful run
         try:
@@ -731,6 +832,204 @@ async def upload_pdf(
 
 
 # ==========================================================
+# ================ AUDIT & GOVERNANCE API ==================
+# ==========================================================
+
+@app.get("/api/v1/audit/events", tags=["Audit & Governance"])
+async def get_audit_events_endpoint(
+    event_type: Optional[str] = None,
+    severity: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Get audit events (Registry of Truth) - log of all safety/quality rejections"""
+    client_id = str(current_user.get("client_id"))
+    is_admin = current_user.get("is_admin", False)
+    filter_client = None if is_admin else client_id
+    
+    events = await get_audit_events(
+        client_id=filter_client,
+        event_type=event_type,
+        severity=severity,
+        limit=limit,
+        offset=offset
+    )
+    
+    return {"events": events, "total": len(events), "limit": limit, "offset": offset}
+
+
+@app.get("/api/v1/audit/summary", tags=["Audit & Governance"])
+async def get_audit_summary_endpoint(
+    days: int = 30,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Get audit summary statistics for governance dashboard"""
+    client_id = str(current_user.get("client_id"))
+    is_admin = current_user.get("is_admin", False)
+    filter_client = None if is_admin else client_id
+    
+    summary = await get_audit_summary(client_id=filter_client, days=days)
+    return summary
+
+
+@app.get("/api/v1/audit/saved-errors", tags=["Audit & Governance"])
+async def get_saved_errors_endpoint(
+    limit: int = 50,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Get recurring errors (Saved Errors) - the governance gold mine"""
+    client_id = str(current_user.get("client_id"))
+    
+    errors = await get_saved_errors(client_id=client_id, limit=limit)
+    return {"errors": errors, "total": len(errors), "limit": limit}
+
+
+@app.get("/api/v1/privacy/settings", tags=["Privacy Controls"])
+async def get_privacy_settings(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db_pool = Depends(get_db_pool)
+):
+    """Get current privacy settings for user"""
+    try:
+        async with db_pool.acquire() as conn:
+            result = await conn.fetchrow("""
+                SELECT data_retention_mode, privacy_settings
+                FROM client_credentials WHERE client_id = $1
+            """, uuid.UUID(str(current_user.get("client_id"))))
+            
+            if not result:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            return {
+                "data_retention_mode": result["data_retention_mode"] or "standard",
+                "privacy_settings": result["privacy_settings"] or {"log_usage": True, "log_inputs": False, "log_outputs": False}
+            }
+    except Exception as e:
+        logging.error(f"Privacy settings error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/privacy/settings", tags=["Privacy Controls"])
+async def update_privacy_settings(
+    data_retention_mode: Optional[str] = None,
+    log_usage: Optional[bool] = None,
+    log_inputs: Optional[bool] = None,
+    log_outputs: Optional[bool] = None,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db_pool = Depends(get_db_pool)
+):
+    """Update privacy settings (ZDR mode, logging controls)"""
+    try:
+        async with db_pool.acquire() as conn:
+            current = await conn.fetchrow("""
+                SELECT privacy_settings FROM client_credentials WHERE client_id = $1
+            """, uuid.UUID(str(current_user.get("client_id"))))
+            
+            current_privacy = current["privacy_settings"] or {}
+            if log_usage is not None:
+                current_privacy["log_usage"] = log_usage
+            if log_inputs is not None:
+                current_privacy["log_inputs"] = log_inputs
+            if log_outputs is not None:
+                current_privacy["log_outputs"] = log_outputs
+            
+            update_parts = []
+            params = []
+            idx = 1
+            
+            if data_retention_mode:
+                if data_retention_mode not in ["standard", "zero-retention", "anonymous"]:
+                    raise HTTPException(status_code=400, detail="Invalid data_retention_mode")
+                update_parts.append(f"data_retention_mode = ${idx}")
+                params.append(data_retention_mode)
+                idx += 1
+            
+            update_parts.append(f"privacy_settings = ${idx}")
+            params.append(current_privacy)
+            idx += 1
+            
+            params.append(uuid.UUID(str(current_user.get("client_id"))))
+            query = f"UPDATE client_credentials SET {', '.join(update_parts)} WHERE client_id = ${idx}"
+            
+            await conn.execute(query, *params)
+            
+            return {
+                "status": "updated",
+                "data_retention_mode": data_retention_mode or current.get("data_retention_mode", "standard"),
+                "privacy_settings": current_privacy
+            }
+    except Exception as e:
+        logging.error(f"Privacy update error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==========================================================
 # =================== USAGE & BILLING ======================
 # ==========================================================
+@app.post("/billing/upgrade/pro", summary="Upgrade current user to VIP (test mode)")
+async def upgrade_to_vip(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db_pool = Depends(get_db_pool)
+):
+    """Test-mode upgrade: set is_vip true and align plan limits.
+    In production, this is driven by Stripe webhook.
+    """
+    try:
+        async with db_pool.acquire() as conn:
+            # Read current usage_limits
+            row = await conn.fetchrow(
+                "SELECT usage_limits, plan_limit FROM client_credentials WHERE client_id = $1",
+                uuid.UUID(str(current_user.get("client_id")))
+            )
+            limits = (row["usage_limits"] or {})
+            vip_limit = int(limits.get("vip_limit", 10000))
+
+            limits["is_vip"] = True
+            limits["vip_limit"] = vip_limit
+            # Align plan_limit to vip_limit for VIP tier
+            await conn.execute(
+                "UPDATE client_credentials SET usage_limits = $1, plan_limit = $2 WHERE client_id = $3",
+                limits, vip_limit, uuid.UUID(str(current_user.get("client_id")))
+            )
+        return {"status": "ok", "is_vip": True, "plan_limit": vip_limit}
+    except Exception as e:
+        logging.error(f"VIP upgrade error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/billing/webhook/test", summary="Stripe webhook (test) to set VIP on checkout")
+async def webhook_test(
+    payload: Dict[str, Any],
+    db_pool = Depends(get_db_pool)
+):
+    """Simulated Stripe webhook handler for test environments.
+    Expects payload with {event_type: "checkout.session.completed", client_id}.
+    """
+    try:
+        if payload.get("event_type") != "checkout.session.completed":
+            return {"status": "ignored"}
+        client_id = payload.get("client_id")
+        if not client_id:
+            raise HTTPException(status_code=400, detail="client_id required")
+
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT usage_limits FROM client_credentials WHERE client_id = $1",
+                uuid.UUID(str(client_id))
+            )
+            limits = (row["usage_limits"] or {})
+            vip_limit = int(limits.get("vip_limit", 10000))
+            limits["is_vip"] = True
+            limits["vip_limit"] = vip_limit
+            await conn.execute(
+                "UPDATE client_credentials SET usage_limits = $1, plan_limit = $2 WHERE client_id = $3",
+                limits, vip_limit, uuid.UUID(str(client_id))
+            )
+        return {"status": "ok", "client_id": client_id, "is_vip": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
