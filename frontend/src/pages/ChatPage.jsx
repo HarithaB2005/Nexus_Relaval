@@ -1,5 +1,5 @@
 // src/pages/ChatPage.jsx
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { generateContent } from '../services/api';
 import { useAuth } from '../components/AuthProvider';
@@ -15,6 +15,8 @@ const ChatPage = () => {
         { role: 'assistant', content: "👋 Welcome to Relevo! I'm your intelligent optimization assistant. Send me any task and I'll transform it into the perfect output with quality assurance." }
     ]);
     const [input, setInput] = useState('');
+    const [inputPlaceholder, setInputPlaceholder] = useState("Describe the objective, e.g. 'Optimize my product description for conversion'");
+    const inputRef = useRef(null);
     const [docContext, setDocContext] = useState('');
     const [maxIterations, setMaxIterations] = useState(3);
     const [isLoading, setIsLoading] = useState(false);
@@ -22,12 +24,15 @@ const ChatPage = () => {
 
     const handleLogout = () => { logout(); navigate('/login'); };
 
-    const handleSend = async () => {
-        if (!input.trim() || isLoading) return;
-        const userMessage = { role: 'user', content: input };
+    const handleSend = async (overrideText) => {
+        if (isLoading) return;
+        const prompt = (overrideText ?? input).trim();
+        if (!prompt) return;
+        const userMessage = { role: 'user', content: prompt };
         const newHistory = [...history, userMessage];
         setHistory(newHistory);
         setInput('');
+        setInputPlaceholder("Describe the objective, e.g. 'Optimize my product description for conversion'");
         setIsLoading(true);
         setError(null);
 
@@ -63,7 +68,14 @@ const ChatPage = () => {
                         iterations_completed: result.iterations,
                         document_context: docContext.trim() || null
                     }
-                }
+                },
+                output_type: result.output_type,
+                clarifier_options: result.clarifier_options || result.pathfinder_options,
+                ambiguity_score: result.ambiguity_score,
+                intent_metadata: result.intent_metadata,
+                nexus_metadata: result.nexus_metadata,
+                rejection_hypotheses: result.rejection_hypotheses,
+                rephrase_similarity: result.rephrase_similarity
             };
             
             setHistory(prev => [...prev, responseWithMeta]);
@@ -175,6 +187,35 @@ const ChatPage = () => {
         }
     };
 
+    const handleOptionSelect = (optionText) => {
+        if (!optionText) return;
+        const normalized = optionText.trim().toLowerCase();
+
+        if (normalized === 'provide missing details' || normalized === 'provide missing detail' || normalized === 'provide details') {
+            setInput('');
+            setInputPlaceholder('Provide more context (exact question and what you want: solve, explain, check, or correct)');
+            inputRef.current?.focus();
+            return;
+        }
+
+        if (normalized === 'not sure' || normalized === 'not sure.') {
+            setHistory(prev => ([
+                ...prev,
+                {
+                    role: 'system',
+                    content: 'To move forward, share any of these: the exact question text, what you want (solve, explain, check, correct), and any constraints or class level. If you only have the question, paste that.'
+                }
+            ]));
+            setInput('');
+            setInputPlaceholder('Paste the exact question here');
+            inputRef.current?.focus();
+            return;
+        }
+
+        setInputPlaceholder("Describe the objective, e.g. 'Optimize my product description for conversion'");
+        handleSend(optionText);
+    };
+
     return (
         <div className="flex h-screen w-full bg-[#020617] text-slate-200">
             {/* 1. FIXED SIDEBAR - Added w-80 and flex-none to prevent squashing */}
@@ -212,7 +253,12 @@ const ChatPage = () => {
                 
                 {/* 3. CHAT WINDOW - flex-1 for scrollable area */}
                 <main className="flex-1 overflow-y-auto">
-                    <ChatWindow history={history} isLoading={isLoading} onContinueOptimization={handleContinueOptimization} />
+                    <ChatWindow 
+                        history={history} 
+                        isLoading={isLoading} 
+                        onContinueOptimization={handleContinueOptimization}
+                        onOptionSelect={handleOptionSelect}
+                    />
                 </main>
 
                 {/* 4. INPUT AREA - High contrast text fixed here */}
@@ -224,6 +270,8 @@ const ChatPage = () => {
                             handleSend={handleSend}
                             isLoading={isLoading}
                             error={error}
+                            inputRef={inputRef}
+                            placeholder={inputPlaceholder}
                             className="text-white placeholder-slate-400"
                         />
                     </div>

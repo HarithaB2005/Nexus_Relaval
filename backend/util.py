@@ -6,6 +6,7 @@ import os
 import json
 import requests
 import re
+from difflib import SequenceMatcher
 from typing import Dict, Any, List, Optional
 
 # --- Configuration for Hybrid LLM Agent ---
@@ -94,7 +95,7 @@ def build_meta_instruction(
     
     conversation_context = "\n".join(context_lines) if context_lines else "Fresh conversation"
     
-    # Build rubric based on detected type
+    # Build rubric based on detected type AND tone
     rubric = ""
     if detected_type == "code_request":
         rubric = "\nRUBRIC (Code):\n- Provide clean, idiomatic, well-commented code\n- Include error handling\n- Use best practices for the language"
@@ -103,10 +104,28 @@ def build_meta_instruction(
     elif detected_type in ["email", "report"]:
         rubric = "\nRUBRIC (Business):\n- Be concise and professional\n- Action-oriented\n- Clear call-to-action if needed"
     
+    # UNIVERSAL: If conversation_tone is empathetic = consultative response for ANY domain
+    if conversation_tone in ["empathetic", "reassuring"]:
+        rubric += "\nRUBRIC (Consultative Response - UNIVERSAL):\n- Start by acknowledging the person's situation (validate concern)\n- Use reassuring, warm language that builds trust\n- Explain reasoning, not just instructions\n- Provide context-aware recommendations (explain WHY)\n- Ask clarifying follow-up questions to understand better\n- End with practical next steps\n- Always include red flag warnings (when to escalate to expert)\n- Tone: warm, professional, human—like speaking to a trusted advisor"
+
+    # PARADOX MODE: honor contradiction, show-don't-tell
+    if sub_intents and "paradox_prompt" in sub_intents:
+        rubric += "\nRUBRIC (Paradox Handling):\n- Honor the contradiction; do not resolve it by normal explanation\n- Demonstrate the concept indirectly (show, don't tell)\n- Avoid explicit definitions or step-by-step instruction\n- Use contrast, metaphor, or experiential framing\n- Keep it concise and insightful"
+    
     # Build sub-intent enforcement
     sub_intent_msg = ""
     if sub_intents:
         sub_intent_msg = f"\nSPECIAL CONSTRAINTS: {', '.join(sub_intents)}"
+
+    # PARADOX OUTPUT FORMAT: keep contradiction, request paradoxical explanation
+    paradox_output_msg = ""
+    if sub_intents and "paradox_prompt" in sub_intents:
+        paradox_output_msg = (
+            "\nPARADOX OUTPUT FORMAT:\n"
+            "- Do NOT remove or resolve the contradiction in the original request.\n"
+            "- The optimized prompt MUST be phrased as: Explain '<original request>' paradoxically.\n"
+            "- Use show-don't-tell phrasing and avoid explicit definitions."
+        )
     
     meta_instruction = f"""You are a professional prompt optimizer. Your task is to improve and refine the user's original request into a perfectly clear, actionable prompt for an AI model.
 
@@ -132,7 +151,7 @@ YOUR TASK:
 6. Output ONLY the optimized prompt (no meta-commentary)
 
 {rubric}
-{sub_intent_msg}
+{sub_intent_msg}{paradox_output_msg}
 
 OPTIMIZED PROMPT:"""
     
@@ -296,28 +315,269 @@ async def classify_prompt(
         history_string = "\n".join([f"({m['role']}): {m['content']}" for m in full_context_history[:-1]])
         history_string = f"PREVIOUS CONTEXT:\n---\n{history_string}\n---\n"
 
-    classifier_prompt = f"""
-You are a Prompt Classifier. Analyze the user's instruction and categorize it.
-Return ONLY a single, valid JSON object, strictly following this schema:
+    def _heuristic_ambiguity_score(text: str) -> float:
+        t = (text or "").lower()
+        if not t.strip():
+            return 0.75
+        broad_terms = ["what is", "explain", "overview", "tell me", "compare", "vs", "difference"]
+        vague_terms = ["thing", "stuff", "something", "some", "etc", "whatever", "somehow", "kind of", "sort of"]
+        short_prompt = len(t.split()) < 6
+        score = 0.0
+        if any(bt in t for bt in broad_terms):
+            score += 0.35
+        if any(vt in t for vt in vague_terms):
+            score += 0.25
+        if "?" in t:
+            score += 0.1
+        if short_prompt:
+            score += 0.2
+        return min(1.0, round(score, 2))
 
+    def _detect_consultative_tone(text: str) -> tuple[bool, str]:
+        """
+        UNIVERSAL behavioral pattern detector for consultative/empathetic tone.
+        Works across ANY domain (medical, legal, tech, business, personal).
+        
+        Returns: (is_consultative, recommended_tone)
+        
+        This enables third-party integrations to work perfectly WITHOUT hardcoding domains.
+        """
+        t = (text or "").lower()
+        
+        # Personal disclosure patterns (universal across all domains)
+        personal_disclosure_signals = [
+            "i have", "i'm dealing", "i'm struggling", "i'm worried", "i'm concerned",
+            "i feel", "i'm unsure", "i don't know", "i'm confused", "i'm overwhelmed",
+            "i've been", "i'm experiencing", "my issue", "my problem", "my team",
+            "we're having", "we're struggling", "it's been", "i'm not sure"
+        ]
+        
+        # Validation/reassurance seeking patterns
+        seeking_validation = [
+            "is it okay", "should i", "is this right", "am i doing", "is it normal",
+            "would it be", "can i", "is there a way", "how do i know", "should we",
+            "is this safe", "will it", "what if"
+        ]
+        
+        # Uncertainty/concern signals
+        concern_signals = [
+            "worried", "concerned", "anxious", "stuck", "confused", "unsure",
+            "overwhelmed", "struggling", "help", "not sure", "uncertain", "afraid",
+            "risk", "danger", "problem"
+        ]
+        
+        # Context-rich signals (shares multiple details = wants personalized/empath response)
+        has_context = len(t.split()) >= 12 and (t.count(",") >= 1 or t.count("because") >= 1)
+        
+        # Check patterns
+        personal_disclosed = any(signal in t for signal in personal_disclosure_signals)
+        seeking_guidance = any(signal in t for signal in seeking_validation + concern_signals)
+        
+        # If shows personal disclosure OR seeking guidance = needs empathy
+        is_consultative = personal_disclosed or seeking_guidance or has_context
+        
+        tone = "empathetic" if is_consultative else "formal"
+        
+        return is_consultative, tone
+
+    def _detect_paradox_prompt(text: str) -> bool:
+        t = (text or "").lower()
+        t = t.replace("’", "'").replace("‘", "'")
+        if not t.strip():
+            return False
+        patterns = [
+            r"\bexplain\b.*\bbut\b.*\b(don't|dont|do not|without)\b.*\bexplain\b",
+            r"\bdefine\b.*\bbut\b.*\b(don't|dont|do not|without)\b.*\bdefine\b",
+            r"\bdescribe\b.*\bbut\b.*\b(don't|dont|do not|without)\b.*\bdescribe\b",
+            r"\bteach\b.*\bbut\b.*\b(don't|dont|do not|without)\b.*\bteach\b",
+            r"\bexplain\b.*\bwithout\b.*\bexplaining\b",
+            r"\bdescribe\b.*\bwithout\b.*\bdescribing\b",
+            r"\bdefine\b.*\bwithout\b.*\bdefining\b",
+        ]
+        return any(re.search(p, t) for p in patterns)
+
+    def _history_has_paradox(history: List[Dict[str, Any]]) -> bool:
+        for msg in history:
+            if msg.get("role") == "user" and _detect_paradox_prompt(msg.get("content", "")):
+                return True
+        return False
+
+    heuristic_ambiguity = _heuristic_ambiguity_score(user_prompt)
+
+    classifier_prompt = f"""
+You are the Intent Understanding System. Analyze the user's instruction and emit a SINGLE JSON object with the fields below. Keep responses deterministic and concise.
+
+Schema:
 {{
-    "type": "string", // One of: "code_request", "website_request", "software_task", "academic_essay", "personal_advice", "daily_advice", "meta_instruction", "generic", "data_analysis", "other"
-    "sub_intents": ["string"], // Examples: "wants_only_code", "needs_firestore", "needs_tailwind", "wants_plagiarism_free", "wants_comparison"
-    "confidence": "float", // Confidence score between 0.0 and 1.0
-    "reason": "string" // Brief explanation for the classification
+  "type": "string",                 // code_request | website_request | software_task | academic_essay | personal_advice | daily_advice | meta_instruction | question | casual_chat | generic | data_analysis | other
+  "sub_intents": ["string"],         // e.g., wants_only_code, needs_tailwind, wants_plagiarism_free, wants_comparison
+  "confidence": 0.0,                  // 0.0 - 1.0
+  "reason": "string",               // brief classification rationale
+  "altitude": "string",             // production | enterprise | academic | generic | casual
+  "conversation_tone": "string",    // formal | casual
+  "user_context": "string",         // short, 1-line description of the user goal/context
+  "vagueness_score": 0.0,             // 0.0 - 1.0 how underspecified
+  "ambiguity_score": 0.0,             // 0.0 - 1.0 how many interpretations possible
+  "complexity_score": 0.0,            // 0.0 - 1.0 task difficulty
+  "burnout_signal": 0.0,             // 0.0 - 1.0 user fatigue/overwhelm
+  "hidden_problem": "string|null",  // brief hidden risk if any
+  "sincerity_polarity": "string",   // utility | curiosity | play | concern
+  "intelligence_altitude": "string",// expert | intermediate | layman
+  "hidden_goal": "string|null",     // optional inferred goal
+  "pathfinder_trigger": true,         // true if we should ask user to pick a focus before proceeding
+  "needs_clarification": true         // true if a targeted clarification question should be asked first
 }}
 
 {history_string}
 USER INSTRUCTION: {user_prompt}
 """
+    base = {
+        "type": "generic",
+        "sub_intents": [],
+        "confidence": 0.5,
+        "reason": "Classification failed",
+        "altitude": "generic",
+        "conversation_tone": "formal",
+        "user_context": "general",
+        "vagueness_score": heuristic_ambiguity,
+        "ambiguity_score": heuristic_ambiguity,
+        "complexity_score": 0.5,
+        "burnout_signal": 0.0,
+        "hidden_problem": None,
+        "sincerity_polarity": "utility",
+        "intelligence_altitude": "layman",
+        "hidden_goal": None,
+        "pathfinder_trigger": heuristic_ambiguity >= 0.6,
+        "needs_clarification": heuristic_ambiguity >= 0.6,
+    }
+
     try:
         raw = await call_llm(classifier_prompt, is_meta_prompt=True)
-        # Find the JSON object in the raw response
         json_start = raw.find("{")
         json_text = raw[json_start:]
-        return json.loads(json_text)
+        parsed = json.loads(json_text)
+        if isinstance(parsed, dict):
+            base.update(parsed)
     except Exception:
-        return {"type": "generic", "sub_intents": [], "confidence": 0.5, "reason": "Classification failed"}
+        return base
+
+    # Normalize numeric fields and backfill with heuristics when missing
+    def _clamp(value: Any, default: float = 0.0) -> float:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except Exception:
+            return default
+
+    base["vagueness_score"] = _clamp(base.get("vagueness_score", heuristic_ambiguity), heuristic_ambiguity)
+    base["ambiguity_score"] = _clamp(base.get("ambiguity_score", base["vagueness_score"]), heuristic_ambiguity)
+    base["complexity_score"] = _clamp(base.get("complexity_score", 0.5), 0.5)
+    base["burnout_signal"] = _clamp(base.get("burnout_signal", 0.0), 0.0)
+    base["confidence"] = _clamp(base.get("confidence", 0.5), 0.5)
+    base["pathfinder_trigger"] = bool(base.get("pathfinder_trigger")) or base["ambiguity_score"] >= 0.65
+    base["needs_clarification"] = bool(base.get("needs_clarification")) or base["ambiguity_score"] >= 0.6
+    
+    # UNIVERSAL PATTERN DETECTOR: Override tone if consultative response needed
+    # This works across ANY domain WITHOUT hardcoding (medical, legal, tech, business, etc.)
+    is_consultative, detected_tone = _detect_consultative_tone(user_prompt)
+    if is_consultative:
+        # User is sharing personal problem/concern = override to empathetic tone
+        base["conversation_tone"] = detected_tone
+        base["needs_clarification"] = True  # Always ask clarifications for personal issues
+
+    # PARADOX DETECTOR: contradictory instructions should bypass clarifier/pathfinder
+    is_paradox = _detect_paradox_prompt(user_prompt) or _history_has_paradox(full_context_history)
+    if is_paradox:
+        if not isinstance(base.get("sub_intents"), list):
+            base["sub_intents"] = []
+        if "paradox_prompt" not in base["sub_intents"]:
+            base["sub_intents"].append("paradox_prompt")
+        base["pathfinder_trigger"] = False
+        base["needs_clarification"] = False
+
+    return base
+
+
+async def validate_intent_context(
+    user_prompt: str,
+    full_context_history: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    LLM-based intent validation gate.
+    Determines if the request is actionable without assumptions and what is missing.
+    """
+    history_string = ""
+    if len(full_context_history) > 1:
+        history_string = "\n".join([f"({m['role']}): {m['content']}" for m in full_context_history[:-1]])
+        history_string = f"PREVIOUS CONTEXT:\n---\n{history_string}\n---\n"
+
+    prompt = f"""
+You are an Intent Validation Engine. Decide if the user's request is actionable without guessing.
+Return ONLY a single JSON object with this schema:
+
+{{
+  "has_actionable_context": true,
+  "should_clarify": false,
+  "missing_info": ["string"],
+    "clarifying_question": "string",
+    "template_prompt": "string"
+}}
+
+Rules:
+- Be conservative: if core details are missing, set should_clarify = true.
+- Do NOT assume a domain, language, or hidden constraints unless explicitly provided.
+- If the user already provided a self-contained question or problem statement, set should_clarify = false.
+- If should_clarify is true, ask 1-2 short questions in clarifying_question.
+- If a template helps, include a short fill-in template in template_prompt.
+
+{history_string}USER REQUEST:
+---
+{user_prompt}
+---
+"""
+
+    base = {
+        "has_actionable_context": True,
+        "should_clarify": False,
+        "missing_info": [],
+        "clarifying_question": "",
+        "template_prompt": ""
+    }
+
+    # Heuristics to avoid clarification loops for prompt-optimization requests.
+    user_text = (user_prompt or "").strip()
+    user_text_lower = user_text.lower()
+    if "optimiz" in user_text_lower and "prompt" in user_text_lower:
+        prior_user_msgs = [m for m in full_context_history[:-1] if m.get("role") == "user"]
+        prior_text = (prior_user_msgs[-1].get("content") or "").strip() if prior_user_msgs else ""
+        if len(prior_text) >= 10 and prior_text.lower() not in ["provide missing details", "provide missing detail", "provide details", "not sure"]:
+            return base
+
+    if ":" in user_text and len(user_text) >= 30:
+        return base
+    if ("\"" in user_text or "'" in user_text) and len(user_text) >= 30:
+        return base
+
+    try:
+        raw = await call_llm(prompt, is_meta_prompt=True)
+        json_start = raw.find("{") if isinstance(raw, str) else -1
+        if json_start >= 0:
+            parsed = json.loads(raw[json_start:])
+            if isinstance(parsed, dict):
+                base.update(parsed)
+    except Exception:
+        return base
+
+    # Normalize fields
+    base["has_actionable_context"] = bool(base.get("has_actionable_context", True))
+    base["should_clarify"] = bool(base.get("should_clarify", False))
+    if not isinstance(base.get("missing_info"), list):
+        base["missing_info"] = []
+    if not isinstance(base.get("template_prompt"), str):
+        base["template_prompt"] = ""
+    if not isinstance(base.get("clarifying_question"), str):
+        base["clarifying_question"] = ""
+
+    return base
 
 
 # ==========================================================
@@ -371,13 +631,40 @@ async def critic_evaluate(
             "- Include representative domains or architectures if relevant (1 short sentence).\n"
         )
 
+    def _is_paradox_task(text: str) -> bool:
+        t = (text or "").lower()
+        t = t.replace("’", "'").replace("‘", "'")
+        if not t.strip():
+            return False
+        patterns = [
+            r"\bexplain\b.*\bbut\b.*\b(don't|dont|do not|without)\b.*\bexplain\b",
+            r"\bdefine\b.*\bbut\b.*\b(don't|dont|do not|without)\b.*\bdefine\b",
+            r"\bdescribe\b.*\bbut\b.*\b(don't|dont|do not|without)\b.*\bdescribe\b",
+            r"\bteach\b.*\bbut\b.*\b(don't|dont|do not|without)\b.*\bteach\b",
+            r"\bexplain\b.*\bwithout\b.*\bexplaining\b",
+            r"\bdescribe\b.*\bwithout\b.*\bdescribing\b",
+            r"\bdefine\b.*\bwithout\b.*\bdefining\b",
+        ]
+        return any(re.search(p, t) for p in patterns)
+
+    paradox_rubric = ""
+    if _is_paradox_task(original_task):
+        paradox_rubric = (
+            "\n\nPARADOX RUBRIC (apply when task is self-contradictory):\n"
+            "- Highest weight: honor the contradiction (do NOT explain directly).\n"
+            "- Favor implicit conveyance (show, don't tell) over clarity.\n"
+            "- Penalize definitions, step lists, and 'it means' phrasing.\n"
+            "- Reward contrast, metaphor, or experiential framing.\n"
+            "- Brevity is preferred when insight is preserved.\n"
+        )
+
     critic_prompt = f"""
 You are the Critic Agent. Compare the optimized prompt and the final output with the ORIGINAL USER TASK.
 Your goal is to score the output for:
 1.  **Completeness:** Does it cover all requirements, including derived (inferred) intent?
 2.  **Conciseness:** Is the final output as direct and brief as possible while being complete?
 3.  **Accuracy/Compliance:** Is the content/code correct, and does it strictly adhere to all explicit constraints (e.g., character count, specific format, required elements) from the ORIGINAL USER TASK?
-{academic_rubric}
+{academic_rubric}{paradox_rubric}
 
 Return ONLY a single, valid JSON object, strictly following this schema:
 
@@ -442,6 +729,7 @@ def build_meta_instruction(
     altitude: Optional[str] = None,
     conversation_tone: Optional[str] = None,
     user_context: Optional[str] = None,
+    detail_level: str = "standard",
 ) -> str:
     """
     LLM-1: Planner. Builds the meta-instruction for the Executor.
@@ -514,12 +802,21 @@ def build_meta_instruction(
         sub_hint.append("Ensure originality and avoid copied content.")
 
     # MAIN GUIDANCE TEXT (Neutral Professional Tone)
+    detail_hint = ""
+    if detail_level == "brief":
+        detail_hint = "Keep it brief (3–5 sentences). Prioritize only the critical asks and facts."
+    elif detail_level == "detailed":
+        detail_hint = "Be detailed: include steps, rationale, and examples when helpful; stay factual and on-task."
+
     guidance = [
         "Rewrite the user's request into a single clear, professional prompt that any AI model can understand perfectly.",
         "Do not change or weaken ANY explicit requirement.",
         "Professionally restate outcome goals (such as competing for shortlisting) in a suitable tone.",
         # --- CRITICAL GENERALIZED INTELLIGENCE INSTRUCTION ---
         "**CRITICAL:** The optimized prompt MUST demonstrate high common-sense intelligence and deep user intent understanding. When the original task is minimal or vague, the prompt must infer and include necessary, professional-grade features (the Minimal Viable Product) that are implicitly required by context. This means always prioritizing user-centric design, security (if data is sensitive), robust error handling, and high-quality aesthetics/presentation.",
+        "Do NOT introduce new facts, statuses, times, or claims the user did not provide (e.g., do not say a code was sent if it is only expected).",
+        "If time is only given as a window, keep it as a window (e.g., 'within the next hour'); do not invent specific clock times.",
+        detail_hint,
         type_hint,
         altitude_hint,
         tone_hint,
@@ -544,12 +841,14 @@ You are a Universal Optimization Agent.
 Rewrite the user's request so any AI assistant delivers a result that is simple, clear, and maximally user-friendly.
 
 - For any code-related tasks, your optimized prompt MUST require:
-  - Readable code with docstrings (or header comment) summarizing the overall logic.
+  - Readable code with .
   - Human-friendly prompt for user input (not raw 'n: ', but e.g. 'Enter N:')
   - Basic error handling for bad/edge-case input (e.g. ValueError, negative, empty)
   - Output that is easy to read and understand even for non-experts (e.g. 'The square of 7 is: 49')
   - Clean, logical variable names, and at least one inline comment explaining the key part.
   - (Bonus) Show a sample output for illustration if helpful.
+  - Least time and space complexity
+  - Shouldn't make things complex
 
 - For any non-code/general tasks, ALWAYS demand:
   - Clear explanation (as a comment, docstring, or short intro)

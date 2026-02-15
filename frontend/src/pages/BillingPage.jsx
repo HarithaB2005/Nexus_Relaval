@@ -162,18 +162,7 @@ export default function BillingPage() {
                     <li>✓ Advanced features</li>
                     <li>✓ API access</li>
                   </ul>
-                  <button onClick={async () => {
-                    try {
-                      const res = await axios.post(`${API_BASE_URL}/billing/upgrade/pro`, {}, {
-                        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-                      });
-                      alert(`✓ Upgraded to VIP! Plan limit: ${res.data.plan_limit} requests/month`);
-                      setShowPlanModal(false);
-                      window.location.reload();
-                    } catch (e) {
-                      alert(`Error: ${e.response?.data?.detail || e.message}`);
-                    }
-                  }} className="btn-primary w-full">Upgrade to Pro</button>
+                  <button onClick={() => { alert('Stripe integration coming soon! Contact sales@relevo.ai'); setShowPlanModal(false); }} className="btn-primary w-full">Upgrade to Pro</button>
                 </div>
 
                 {/* Enterprise Plan */}

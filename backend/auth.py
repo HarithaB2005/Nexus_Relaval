@@ -29,7 +29,8 @@ async def get_user_by_email(email: str, db_pool: asyncpg.Pool) -> Optional[Dict[
         async with db_pool.acquire() as connection:
             user_data = await connection.fetchrow(
                 """
-                SELECT client_id, client_email, client_name, status, is_admin, usage_limits, plan_limit
+                SELECT client_id, client_email, client_name, status, is_admin, usage_limits, plan_limit,
+                       clarifier_count_last_5, last_5_request_types
                 FROM client_credentials 
                 WHERE client_email = $1 AND status = 'active'
                 """, 
@@ -42,6 +43,11 @@ async def get_user_by_email(email: str, db_pool: asyncpg.Pool) -> Optional[Dict[
             # Ensure usage_limits is always a dictionary
             if isinstance(u_dict.get("usage_limits"), str):
                 u_dict["usage_limits"] = json.loads(u_dict["usage_limits"])
+            if isinstance(u_dict.get("last_5_request_types"), str):
+                try:
+                    u_dict["last_5_request_types"] = json.loads(u_dict["last_5_request_types"])
+                except Exception:
+                    u_dict["last_5_request_types"] = []
             return u_dict
     except Exception as e:
         logging.error(f"Authentication DB Error: {e}")

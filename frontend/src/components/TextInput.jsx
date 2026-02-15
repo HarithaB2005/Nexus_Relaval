@@ -1,7 +1,7 @@
 // src/components/TextInput.jsx
 import React from 'react';
 
-const TextInput = ({ input, setInput, handleSend, isLoading, error, className = '' }) => {
+const TextInput = ({ input, setInput, handleSend, isLoading, error, inputRef, placeholder, className = '' }) => {
     return (
         <footer className={`p-4 border-t border-slate-700 bg-slate-900/60 relative z-30 shadow-inner ${className}`}>
             {error && (
@@ -11,15 +11,14 @@ const TextInput = ({ input, setInput, handleSend, isLoading, error, className = 
             )}
 
             <div className="flex items-center gap-3 max-w-4xl mx-auto">
-                <label htmlFor="chat-input" className="sr-only">Describe your objective</label>
                 <input
-                    id="chat-input"
                     type="text"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+                    ref={inputRef}
                     className="flex-1 p-3 bg-slate-800 border border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-400 text-slate-100 placeholder-slate-400 transition"
-                    placeholder="Describe the objective, e.g. 'Optimize my product description for conversion'"
+                    placeholder={placeholder || "Describe the objective, e.g. 'Optimize my product description for conversion'"}
                     disabled={isLoading}
                 />
 

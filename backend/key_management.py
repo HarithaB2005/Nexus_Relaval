@@ -48,9 +48,9 @@ async def register_new_user(email: str, password: str, name: str, db_pool) -> Op
             
             res = await conn.fetchrow(
                 """INSERT INTO client_credentials 
-                   (client_id, client_name, client_email, password_hash, status, is_admin, usage_limits, plan_limit) 
-                   VALUES ($1, $2, $3, $4, 'active', FALSE, $5::jsonb, 50) 
-                   RETURNING client_id, client_name, client_email, is_admin, usage_limits, plan_limit""",
+                   (client_id, client_name, client_email, password_hash, status, is_admin, usage_limits, plan_limit, clarifier_count_last_5, last_5_request_types) 
+                   VALUES ($1, $2, $3, $4, 'active', FALSE, $5::jsonb, 50, 0, '[]'::jsonb) 
+                   RETURNING client_id, client_name, client_email, is_admin, usage_limits, plan_limit, clarifier_count_last_5, last_5_request_types""",
                 client_id, name, email, hashed_pass, json.dumps(default_limits)
             )
             
@@ -71,7 +71,8 @@ async def authenticate_user(email: str, password: str, db_pool) -> Optional[Dict
     """Authenticates and parses JSONB for the response."""
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow(
-            """SELECT client_id, client_name, client_email, password_hash, is_admin, usage_limits, plan_limit 
+            """SELECT client_id, client_name, client_email, password_hash, is_admin, usage_limits, plan_limit,
+                      clarifier_count_last_5, last_5_request_types
                FROM client_credentials WHERE client_email = $1""", 
             email
         )
@@ -80,6 +81,11 @@ async def authenticate_user(email: str, password: str, db_pool) -> Optional[Dict
             u_dict.pop('password_hash')
             if isinstance(u_dict['usage_limits'], str):
                 u_dict['usage_limits'] = json.loads(u_dict['usage_limits'])
+            if isinstance(u_dict.get('last_5_request_types'), str):
+                try:
+                    u_dict['last_5_request_types'] = json.loads(u_dict['last_5_request_types'])
+                except Exception:
+                    u_dict['last_5_request_types'] = []
             return u_dict
     return None
 
@@ -87,7 +93,7 @@ async def authenticate_user(email: str, password: str, db_pool) -> Optional[Dict
 # ==================== USAGE & LIMITS ======================
 # ==========================================================
 
-async def increment_usage_count(client_id: str, db_pool, tokens_used: int = 0, cost_usd: float = 0.0):
+async def increment_usage_count(client_id: str, db_pool, tokens_used: int = 0, cost_usd: float = 0.0, silent_misalignment: bool = False):
     """Records usage in both new tracking table (primary) and legacy JSONB (backward compat)."""
     async with db_pool.acquire() as conn:
         async with conn.transaction():
@@ -95,10 +101,10 @@ async def increment_usage_count(client_id: str, db_pool, tokens_used: int = 0, c
             try:
                 await conn.execute(
                     """
-                    INSERT INTO usage_tracking (client_id, requests_count, tokens_count, cost_usd)
-                    VALUES ($1, 1, $2, $3)
+                    INSERT INTO usage_tracking (client_id, requests_count, tokens_count, cost_usd, silent_misalignment)
+                    VALUES ($1, 1, $2, $3, $4)
                     """,
-                    client_id, tokens_used, cost_usd
+                    client_id, tokens_used, cost_usd, silent_misalignment
                 )
             except Exception as e:
                 logger.warning(f"Failed to insert into usage_tracking: {e}")
@@ -150,7 +156,8 @@ async def validate_api_key(api_key: str, db_pool) -> Optional[Dict[str, Any]]:
     h = generate_api_key_hash(api_key)
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow(
-            """SELECT u.client_id, u.is_admin, u.client_email, u.usage_limits, u.plan_limit 
+            """SELECT u.client_id, u.is_admin, u.client_email, u.usage_limits, u.plan_limit,
+                      u.clarifier_count_last_5, u.last_5_request_types
                FROM client_credentials u 
                JOIN api_keys k ON u.client_id = k.client_id
                WHERE k.api_key_hash = $1 AND k.revoked = FALSE AND u.status = 'active'""", 
@@ -160,5 +167,80 @@ async def validate_api_key(api_key: str, db_pool) -> Optional[Dict[str, Any]]:
             u_dict = dict(user)
             if isinstance(u_dict['usage_limits'], str):
                 u_dict['usage_limits'] = json.loads(u_dict['usage_limits'])
+            if isinstance(u_dict.get('last_5_request_types'), str):
+                try:
+                    u_dict['last_5_request_types'] = json.loads(u_dict['last_5_request_types'])
+                except Exception:
+                    u_dict['last_5_request_types'] = []
             return u_dict
     return None
+
+
+async def update_clarifier_fatigue(client_id: str, db_pool, delta: int) -> None:
+    """Updates clarifier_count_last_5 with a bounded delta."""
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE client_credentials
+            SET clarifier_count_last_5 = GREATEST(0, COALESCE(clarifier_count_last_5, 0) + $2)
+            WHERE client_id = $1
+            """,
+            client_id, delta
+        )
+
+
+async def update_last_request_types(client_id: str, db_pool, intent_type: Optional[str]) -> None:
+    """Append intent type to last_5_request_types (keeps last 5)."""
+    if not intent_type:
+        return
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT last_5_request_types
+            FROM client_credentials
+            WHERE client_id = $1
+            """,
+            client_id
+        )
+        current = []
+        if row:
+            row_dict = dict(row)
+        else:
+            row_dict = {}
+        if isinstance(row_dict.get("last_5_request_types"), list):
+            current = row_dict.get("last_5_request_types")
+        elif isinstance(row_dict.get("last_5_request_types"), str):
+            try:
+                current = json.loads(row_dict.get("last_5_request_types"))
+            except Exception:
+                current = []
+        current.append(intent_type)
+        current = current[-5:]
+        await conn.execute(
+            """
+            UPDATE client_credentials
+            SET last_5_request_types = $2::jsonb
+            WHERE client_id = $1
+            """,
+            client_id, json.dumps(current)
+        )
+
+
+async def get_silent_misalignment_rate(client_id: str, db_pool, window: int = 20) -> float:
+    """Compute silent misalignment rate from recent usage_tracking rows."""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT silent_misalignment
+            FROM usage_tracking
+            WHERE client_id = $1::TEXT
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            client_id, window
+        )
+        if not rows:
+            return 0.0
+        total = len(rows)
+        misaligned = sum(1 for r in rows if r.get("silent_misalignment"))
+        return misaligned / max(1, total)

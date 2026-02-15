@@ -5,7 +5,7 @@ import React, { useEffect, useRef, useState } from 'react';
  * Message rendering component
  * Updated with enterprise dark-mode styling and score indicators
  */
-const Message = ({ message, onContinueOptimization }) => {
+const Message = ({ message, onContinueOptimization, onOptionSelect }) => {
     const isUser = message.role === 'user';
     const isSystem = message.role === 'system';
     const [showPrompt, setShowPrompt] = useState(false);
@@ -13,6 +13,9 @@ const Message = ({ message, onContinueOptimization }) => {
     const optimizedPreview = optimizedPrompt ? (optimizedPrompt.length > 120 ? optimizedPrompt.slice(0, 117) + '...' : optimizedPrompt) : null;
     const metadata = message.metadata;
     const continuationData = message.debug?.continuation_available ? message.debug : null;
+    const options = message.clarifier_options || message.pathfinder_options;
+    const showOptions = Array.isArray(options) && options.length > 0 && (message.output_type === 'clarifier' || message.output_type === 'pathfinder');
+    const [otherText, setOtherText] = useState('');
 
     const base = 'p-4 my-3 rounded-2xl max-w-[72%] transition-all';
     const bubbleClass = isUser
@@ -49,17 +52,66 @@ const Message = ({ message, onContinueOptimization }) => {
                         {message.timestamp && <div className="text-[11px] text-slate-400">{message.timestamp}</div>}
                     </div>
 
-                    <div className="mt-2 whitespace-pre-wrap leading-relaxed text-sm text-slate-100 break-words max-h-[600px] overflow-y-auto scrollbar-thin scrollbar-thumb-slate-600"
-                         {...(typeof message.content === 'string' && message.content.includes('[Blocked by content safety filter]') ? { role: 'alert', 'aria-live': 'assertive' } : {})}>
+                    <div className="mt-2 whitespace-pre-wrap leading-relaxed text-sm text-slate-100 break-words max-h-[600px] overflow-y-auto scrollbar-thin scrollbar-thumb-slate-600">
                         {message.content}
                     </div>
 
                     {/* New simple metadata display */}
-                    {metadata && (
+                    {metadata && metadata.quality !== undefined && (
                         <div className="mt-3 pt-2 border-t border-slate-700/40 flex gap-3 text-xs text-slate-400">
                             <span>✓ Quality: {(metadata.quality * 100).toFixed(0)}%</span>
                             <span>⚡ {metadata.executionTime}s</span>
                             <span>🔄 {metadata.iterations} iterations</span>
+                        </div>
+                    )}
+
+                    {/* Intent Understanding options */}
+                    {showOptions && (
+                        <div className="mt-3 p-3 bg-slate-900/60 border border-slate-700/60 rounded-lg">
+                            <div className="text-xs uppercase tracking-widest text-indigo-200 font-semibold mb-1">Clarify intent</div>
+                            {(message.ambiguity_score !== undefined || message.rephrase_similarity !== undefined) && (
+                                <div className="text-[11px] text-slate-400 mb-2">
+                                    {message.ambiguity_score !== undefined && <span className="mr-3">Ambiguity: {(message.ambiguity_score * 100).toFixed(0)}%</span>}
+                                    {message.rephrase_similarity !== undefined && <span>Rephrase similarity: {(message.rephrase_similarity * 100).toFixed(0)}%</span>}
+                                </div>
+                            )}
+                            <div className="flex flex-wrap gap-2">
+                                {options.filter(opt => !opt.toLowerCase().startsWith('other')).map((opt, idx) => {
+                                    // Extract domain name (before the colon)
+                                    const domainName = opt.split(':')[0].trim();
+                                    return (
+                                        <button
+                                            key={`${opt}-${idx}`}
+                                            onClick={() => {
+                                                // Send just the domain name, not the full option text
+                                                onOptionSelect && onOptionSelect(domainName);
+                                            }}
+                                            className="px-3 py-2 text-xs bg-indigo-700/80 hover:bg-indigo-600 text-white rounded-lg transition"
+                                        >
+                                            {opt}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            <div className="mt-3 flex gap-2 items-center">
+                                <input
+                                    value={otherText}
+                                    onChange={(e) => setOtherText(e.target.value)}
+                                    placeholder="Other (tell me in your words)"
+                                    className="flex-1 px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-100"
+                                />
+                                <button
+                                    onClick={() => {
+                                        const text = otherText.trim();
+                                        if (!text) return;
+                                        onOptionSelect && onOptionSelect(text);
+                                        setOtherText('');
+                                    }}
+                                    className="px-3 py-2 text-xs bg-slate-700 hover:bg-slate-600 text-white rounded-lg"
+                                >
+                                    Send
+                                </button>
+                            </div>
                         </div>
                     )}
 
@@ -119,7 +171,7 @@ const Message = ({ message, onContinueOptimization }) => {
     );
 };
 
-const ChatWindow = ({ history, isLoading, onContinueOptimization }) => {
+const ChatWindow = ({ history, isLoading, onContinueOptimization, onOptionSelect }) => {
     const messagesEndRef = useRef(null);
 
     // Auto-scroll logic for real-time orchestration updates
@@ -128,7 +180,7 @@ const ChatWindow = ({ history, isLoading, onContinueOptimization }) => {
     }, [history, isLoading]);
 
     return (
-        <main className="flex-1 overflow-y-auto p-6 space-y-2 scrollbar-thin scrollbar-thumb-gray-700" role="log" aria-live="polite" aria-relevant="additions text">
+        <main className="flex-1 overflow-y-auto p-6 space-y-2 scrollbar-thin scrollbar-thumb-gray-700">
             {history.length === 0 && (
                 <div className="h-full flex flex-col items-center justify-center opacity-20 select-none">
                     <div className="text-6xl mb-4">⚡</div>
@@ -137,7 +189,7 @@ const ChatWindow = ({ history, isLoading, onContinueOptimization }) => {
             )}
 
             {history.map((msg, index) => (
-                <Message key={index} message={msg} onContinueOptimization={onContinueOptimization} />
+                <Message key={index} message={msg} onContinueOptimization={onContinueOptimization} onOptionSelect={onOptionSelect} />
             ))}
             
             {/* Orchestration Loading State */}
