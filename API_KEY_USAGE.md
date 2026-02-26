@@ -256,7 +256,7 @@ curl -X POST http://localhost:8000/api/v1/generate-prompt \
 │  ✓ Validate API Key                            │
 │  ✓ Check User & Plan Limits                    │
 │  ✓ Run APO Workflow (4-agent)                  │
-│  ✓ Use Groq for LLM Processing                 │
+│  ✓ LLM Processing                 │
 │  ✓ Score Quality with Critic                   │
 │  ✓ Track Usage in Database                     │
 └──────────────────┬──────────────────────────────┘

@@ -265,10 +265,32 @@ async def apo_workflow(
         return any(cue in msg_lower for cue in rejection_cues)
 
     def _is_domain_selection(text: str) -> bool:
-        """Check if user selected one of the 6 domains."""
+        """Check if user selected one of the 6 domains (with flexibility for variations)."""
         t = text.strip().lower()
+        
+        # Exact matches
         domains = ["software engineering", "psychology", "philosophy", "business", "mathematics", "art/design", "art", "design"]
-        return any(t == domain for domain in domains)
+        if any(t == domain for domain in domains):
+            return True
+        
+        # Flexible matches for common variations:
+        # "I meant software" → software engineering
+        # "software" → software engineering
+        # etc.
+        domain_keywords = {
+            "software": ["software", "code", "development", "programming", "engineering", "tech", "implementation", "architecture"],
+            "psychology": ["psychology", "behavioral", "cognitive", "mind", "thinking", "mental"],
+            "philosophy": ["philosophy", "philosophical", "conceptual", "fundamental", "ethics", "epistemology"],
+            "business": ["business", "strategy", "market", "roi", "stakeholder", "impact", "commercial"],
+            "mathematics": ["math", "mathematical", "quantitative", "formal", "model", "equation"],
+            "art/design": ["art", "design", "creative", "aesthetic", "visual", "narrative"]
+        }
+        
+        for domain, keywords in domain_keywords.items():
+            if any(kw in t for kw in keywords):
+                return True
+        
+        return False
 
     def _is_clarification_refiner(text: str) -> bool:
         """
@@ -541,6 +563,24 @@ async def apo_workflow(
             rephrase_similarity >= 0.50  # Similar wording = rephrasing (50% threshold for "in other way" detection)
         )
         
+        # CRITICAL FIX: If previous assistant message was a rejection/clarifier menu,
+        # and user responds with a domain selection, ESCAPE the rejection loop
+        escape_rejection_via_domain = False
+        if len(full_context_history) >= 2:
+            prev_assistant_msg = full_context_history[-2]
+            if prev_assistant_msg.get("role") == "assistant":
+                prev_content = (prev_assistant_msg.get("content") or "").lower()
+                # Check if previous was a rejection/clarifier offering domains
+                is_prev_clarifier = any(indicator in prev_content for indicator in [
+                    "pick which", "closest intent", "pick the closest", "tell me in your own words",
+                    "which angle", "which domain", "refining or rejecting", "clarification pending"
+                ])
+                if is_prev_clarifier and _is_domain_selection(abstract_task):
+                    # User responded to clarifier/rejection menu with domain → escape and proceed
+                    escape_rejection_via_domain = True
+                    implicit_rejection = False
+                    explicit_rejection = False
+        
         # If implicit rejection (rephrasing), analyze if the rephrased version is clearer
         rephrased_is_clearer = False
         if implicit_rejection and not explicit_rejection:
@@ -566,7 +606,7 @@ async def apo_workflow(
         # If so, skip rejection handling and proceed normally with augmented task
         is_domain_selection = _is_domain_selection(abstract_task)
         
-        # Rejection flag: show clarifier UNLESS rephrased version is clearly better OR it's a domain selection
+        # Rejection flag: show clarifier UNLESS rephrased version is clearly better OR it's a domain selection OR we're escaping via domain
         rejection_flag = (explicit_rejection or implicit_rejection) and not rephrased_is_clearer and not is_domain_selection
         
         results["detected_altitude"] = altitude
@@ -701,13 +741,41 @@ async def apo_workflow(
         # Get user messages for context checking
         user_messages = [m for m in full_context_history if m.get("role") == "user"]
 
-        # If user selected a domain, augment the original task and proceed normally
+        # If user selected a domain, augment the original task and update classification context
         if is_domain_selection:
             if len(user_messages) >= 2:
                 original_question = user_messages[0].get("content", abstract_task)
-                domain_selected = abstract_task.strip()
+                domain_selected = abstract_task.strip().lower()
                 abstract_task = f"{original_question} (from {domain_selected} perspective)"
                 results["domain_selected"] = domain_selected
+                
+                # UPDATE CLASSIFICATION FOR DOMAIN CONTEXT
+                # This ensures the planner knows we're answering from a specific domain lens
+                if "software" in domain_selected:
+                    detected_type = "code_request"  # Treat as technical/implementation-focused
+                    altitude = "production"
+                    user_context = "software development context; explain application thinking in terms of real-world coding practices, architecture decisions, and pragmatic implementation"
+                    conversation_tone = "formal"
+                elif "psychology" in domain_selected:
+                    altitude = "academic"
+                    user_context = "psychology/behavioral context; explain application thinking through cognitive and behavioral lenses"
+                    detected_type = "academic_essay"
+                elif "philosophy" in domain_selected:
+                    altitude = "academic"
+                    user_context = "philosophy context; explore conceptual foundations and epistemology"
+                    detected_type = "academic_essay"
+                elif "business" in domain_selected:
+                    altitude = "production"
+                    user_context = "business/strategy context; focus on ROI, market impact, and stakeholder value"
+                    detected_type = "question"
+                elif "mathematics" in domain_selected:
+                    altitude = "academic"
+                    user_context = "mathematics context; provide formal models, proofs, or quantitative framing where applicable"
+                    detected_type = "academic_essay"
+                elif "art" in domain_selected or "design" in domain_selected:
+                    altitude = "generic"
+                    user_context = "creative/design context; explore aesthetic and narrative dimensions"
+                    detected_type = "generic"
         
         # If user provided a clarification refiner, merge it with the original question
         elif _is_clarification_refiner(abstract_task) and len(user_messages) >= 2:

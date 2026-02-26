@@ -299,7 +299,7 @@ response = requests.post(f"{api_url}/api/v1/generate-prompt",
 ### What to Show
 1. **Live Product**: http://yourapp.vercel.app
 2. **Sign In**: demo@nexus.local / demo123
-3. **Try the Control Plane**: Type a rough task → Watch intent analysis + quality enforcement → Quality score locks in (or iterates)
+3. **Try APO**: Type a rough task → See real-time optimization → Quality score appears
 4. **API Docs**: Backend URL + `/docs` → Interactive Swagger (auto-generated, professional)
 5. **Key Metrics to Highlight**:
    - ✅ 4-agent AI orchestration (not single LLM)
@@ -311,9 +311,9 @@ response = requests.post(f"{api_url}/api/v1/generate-prompt",
    - ✅ Built-in billing & usage tracking (SaaS-ready)
 
 ### Talking Points
-- **Problem**: 41% of AI outputs are rejected because models misunderstood the ask. No auditability. No governance.
-- **Solution**: Nexus Relaval enforces intent verification + quality gates BEFORE generating. Models can't self-regulate; enterprises need a control plane.
-- **Differentiation**: Not just rewriting prompts; **prevents failures by enforcing intent alignment and audit trails**.
+- **Problem**: Standard prompts get mediocre AI outputs. Users spend hours refining.
+- **Solution**: Nexus Relaval uses intelligent agents to optimize *on their behalf* — no manual rewrites needed.
+- **Differentiation**: Not just rewriting prompts; understands user *intent* and fixes rejections automatically.
 - **Business Model**: B2B API, per-request billing, white-label ready (frontend available).
 - **Defensible Tech**: Multi-agent decision logic + clarifier suppression algorithm (hard to replicate).
 - **Revenue Ready**: Billing system, API key management, usage tracking all built-in.
@@ -322,11 +322,11 @@ response = requests.post(f"{api_url}/api/v1/generate-prompt",
 ```
 1. Login with demo account
 2. Type: "Help me write a proposal that gets investors excited"
-3. **Intent Analysis** detects: open-ended + broad intent → asks for 1 clarification (prevents wasted output)
+3. APO detects: open-ended + broad intent → asks for 1 clarification
 4. User picks: "Business context"
-5. **Quality Enforcement** iterates: Planner → Executor → Critic → Scores 0.97/1.0 (2 iterations)
-6. **Audit Trail** visible: confidence scores, hidden_problems, escalation_alerts exported
-7. Show API docs (/docs) → "Governance layer for every model"
+5. System generates optimized prompt + final output
+6. Quality score: 0.97/1.0 → iteration count: 2 (auto-optimized)
+7. Show API docs (/docs) → "This is what partners integrate"
 ```
 
 ---
@@ -337,7 +337,7 @@ response = requests.post(f"{api_url}/api/v1/generate-prompt",
 Nexus Relaval 123/
 ├── backend/
 │   ├── main.py                    # FastAPI app, auth, rate limiting
-│   ├── agents.py                  # 4-agent control plane (Classifier → Planner → Executor → Critic)
+│   ├── agents.py                  # 4-agent APO workflow orchestration
 │   ├── util.py                    # LLM calls, Classifier, Planner, Critic
 │   ├── auth.py                    # JWT token creation/validation
 │   ├── key_management.py          # User registration, API key hashing
@@ -350,7 +350,7 @@ Nexus Relaval 123/
 │   ├── src/
 │   │   ├── App.jsx                # Main React routing component
 │   │   ├── pages/
-│   │   │   ├── ChatPage.jsx       # Control plane UI (intent analysis + quality enforcement)
+│   │   │   ├── ChatPage.jsx       # Main APO interface
 │   │   │   ├── LoginPage.jsx
 │   │   │   ├── RegisterPage.jsx
 │   │   │   ├── UsagePage.jsx
@@ -518,16 +518,16 @@ docker compose logs backend | grep -i error
 
 ## 💡 Key Differentiators
 
-| Capability | Nexus Relaval | Standard LLM |
-|-----------|--------------|---------------|
-| **Intent Verification** | ✅ Detects ambiguity before generating | ❌ Assumes understanding |
-| **Audit Trail** | ✅ PostgreSQL logs all decisions | ❌ No compliance trail |
-| **Quality Gates** | ✅ Blocks output below YOUR threshold | ❌ One-shot, no verification |
-| **Enterprise Rules** | ✅ Adapt to org-specific policies | ❌ Same for all use cases |
-| **Governance Export** | ✅ escalation_alert, burnout_signal, hidden_problem | ❌ Not exposed |
-| **Rejection Recovery** | ✅ 6-domain lens offering (83% resolve in 1 follow-up) | ❌ Regenerates same wrong answer |
-| **Model-Agnostic** | ✅ Gemini → Groq → Ollama (swap without code) | ❌ Locked to one provider |
-| **Air-Gapped Option** | ✅ Run 100% local (Ollama) | ❌ Cloud-only |
+| Feature | Nexus Relaval | Standard LLM |
+|---------|---------------|--------------|
+| **Agent System** | 4-agent orchestration | Single model |
+| **Decision Logic** | Intelligent clarifier suppression | Asks for clarification always |
+| **Rejection Detection** | Implicit + explicit (41% recovery) | None |
+| **Quality Gate** | Iterates until 0.95+ (or user stops) | One-shot |
+| **Fallback Strategy** | Gemini → Groq → Ollama | Single provider |
+| **Security** | JWT, Argon2, rate limiting, audit logs | Basic |
+| **Billing Ready** | Yes (usage tracking built-in) | Manual integration |
+| **API Documentation** | Auto-generated Swagger | Manual docs |
 
 ---
 

@@ -25,6 +25,114 @@ GEMINI_API_URL: str = "https://generativelanguage.googleapis.com/v1beta/models/g
 GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
 
 # ==========================================================
+# ======== LEARNING & FEEDBACK SYSTEM ====================
+# ==========================================================
+
+class LearningMemory:
+    """
+    Tracks past failures, clarifications, and successful patterns.
+    Enables Nexus Relaval to avoid repeating mistakes and learn from user corrections.
+    """
+    def __init__(self):
+        self.failed_patterns: Dict[str, Dict[str, Any]] = {}  # prompt_pattern -> {reason, timestamp, count}
+        self.successful_clarifications: List[Dict[str, Any]] = []  # List of {original, clarification, result}
+        self.corrections_applied: List[Dict[str, Any]] = []  # List of {failed_prompt, corrected_prompt, outcome}
+        self.user_rejections: List[Dict[str, Any]] = []  # List of {prompt, rejection_reason, correction_provided}
+        self.confidence_adjustments: Dict[str, float] = {}  # prompt_pattern -> confidence_delta
+        self.skip_clarification_patterns: List[str] = []  # Patterns where we learned NOT to ask for clarification
+    
+    def record_failure(self, prompt_pattern: str, reason: str):
+        """Record when a prompt/classification fails."""
+        if prompt_pattern not in self.failed_patterns:
+            self.failed_patterns[prompt_pattern] = {"reason": reason, "count": 0, "timestamp": time.time()}
+        self.failed_patterns[prompt_pattern]["count"] += 1
+    
+    def record_clarification_success(self, original: str, clarification_asked: str, user_response: str, outcome: str):
+        """Record when asking for clarification led to success."""
+        self.successful_clarifications.append({
+            "original": original,
+            "clarification": clarification_asked,
+            "user_response": user_response,
+            "outcome": outcome,
+            "timestamp": time.time()
+        })
+    
+    def record_correction(self, failed_prompt: str, corrected_prompt: str, feedback: str):
+        """Record when user corrected/improved a prompt."""
+        self.corrections_applied.append({
+            "failed": failed_prompt,
+            "corrected": corrected_prompt,
+            "feedback": feedback,
+            "timestamp": time.time()
+        })
+        
+        # If feedback indicates "don't ask for clarification", learn that pattern
+        if ("don't ask" in feedback.lower() or "just optim" in feedback.lower() or 
+            "optimize it" in feedback.lower() or "PATTERN: Skip clarification" in feedback):
+            # Extract key terms from the original prompt to build pattern
+            key_terms = self._extract_key_terms(failed_prompt)
+            for term in key_terms:
+                if term not in self.skip_clarification_patterns:
+                    self.skip_clarification_patterns.append(term)
+    
+    def record_rejection(self, prompt: str, reason: str, user_correction: Optional[str] = None):
+        """Record when output was rejected and user provided correction."""
+        self.user_rejections.append({
+            "prompt": prompt,
+            "rejection_reason": reason,
+            "user_correction": user_correction,
+            "timestamp": time.time()
+        })
+    
+    def should_skip_clarification(self, prompt: str) -> bool:
+        """Check if we've learned that this type of prompt doesn't need clarification."""
+        # Check if any corrected pattern matches this prompt
+        for correction in self.corrections_applied:
+            if self._similarity(prompt, correction["failed"]) > 0.7:
+                if "optimize" in correction["feedback"].lower() or "don't ask" in correction["feedback"].lower():
+                    return True
+        
+        # Check if any key terms from learned patterns appear in this prompt
+        prompt_lower = prompt.lower()
+        for pattern in self.skip_clarification_patterns:
+            if pattern in prompt_lower:
+                return True
+        
+        return False
+    
+    def get_learned_confidence_adjustment(self, prompt_type: str) -> float:
+        """Get confidence adjustment based on past learnings."""
+        return self.confidence_adjustments.get(prompt_type, 0.0)
+    
+    def _extract_key_terms(self, text: str) -> List[str]:
+        """Extract key terms that characterize this prompt type."""
+        t = (text or "").lower()
+        # Look for design/image-related keywords
+        key_terms = []
+        if any(word in t for word in ["image", "design", "visual", "create", "generate", "differenti", "reference"]):
+            key_terms.append("image")
+        if any(word in t for word in ["code", "function", "script", "program"]):
+            key_terms.append("code")
+        if any(word in t for word in ["write", "email", "letter", "document"]):
+            key_terms.append("writing")
+        if any(word in t for word in ["explain", "compare", "difference"]):
+            key_terms.append("explanation")
+        return key_terms
+    
+    def _similarity(self, a: str, b: str) -> float:
+        """Simple similarity check between two strings."""
+        a_lower = (a or "").lower()
+        b_lower = (b or "").lower()
+        if not a_lower or not b_lower:
+            return 0.0
+        common_words = len(set(a_lower.split()) & set(b_lower.split()))
+        total_words = len(set(a_lower.split()) | set(b_lower.split()))
+        return common_words / total_words if total_words > 0 else 0.0
+
+# Global learning memory instance
+LEARNING_MEMORY = LearningMemory()
+
+# ==========================================================
 # ======== PATHFINDER PROMPT BUILDER =======================
 # ==========================================================
 
@@ -265,6 +373,159 @@ async def call_llm(prompt_to_send: str, is_meta_prompt: bool = True) -> str:
     return await _ollama_generate(prompt_to_send)
 
 
+# ==========================================================
+# ======== FEEDBACK & LEARNING RECORDING =================
+# ==========================================================
+
+async def record_optimization_feedback(
+    original_prompt: str,
+    optimized_prompt: str,
+    user_feedback: str,
+    outcome: str = "success"
+) -> Dict[str, Any]:
+    """
+    Record feedback on an optimization attempt.
+    Called when user corrects/rejects an optimized prompt.
+    
+    Args:
+        original_prompt: User's original request
+        optimized_prompt: System's optimization
+        user_feedback: User's correction or comment (e.g., "just optimize it, don't ask")
+        outcome: "success" | "rejection" | "correction"
+    """
+    if outcome == "correction":
+        LEARNING_MEMORY.record_correction(original_prompt, optimized_prompt, user_feedback)
+        # Learn: if user says "don't ask", avoid clarification next time
+        if "don't ask" in user_feedback.lower() or "just optim" in user_feedback.lower():
+            LEARNING_MEMORY.record_correction(original_prompt, optimized_prompt, "PATTERN: Skip clarification for image/design tasks")
+    
+    elif outcome == "rejection":
+        LEARNING_MEMORY.record_rejection(original_prompt, user_feedback, optimized_prompt)
+    
+    return {
+        "status": "feedback_recorded",
+        "learning_count": len(LEARNING_MEMORY.corrections_applied),
+        "message": f"System learned from this feedback. Total learnings: {len(LEARNING_MEMORY.corrections_applied)} corrections, {len(LEARNING_MEMORY.user_rejections)} rejections."
+    }
+
+
+async def record_classification_feedback(
+    prompt: str,
+    classification_result: Dict[str, Any],
+    user_correction: str,
+    was_correct: bool = False
+) -> Dict[str, Any]:
+    """
+    Record feedback on classification accuracy.
+    Called when the classifier makes a mistake (e.g., asked for clarification when not needed).
+    
+    Args:
+        prompt: Original user prompt
+        classification_result: What the system classified it as
+        user_correction: User's feedback (e.g., "This was clear, don't ask for clarification")
+        was_correct: Whether the classification was accurate
+    """
+    if not was_correct:
+        classified_as = classification_result.get("type", "unknown")
+        LEARNING_MEMORY.record_failure(prompt, user_correction)
+        
+        # If user says not to ask for clarification, learn that
+        if "don't ask" in user_correction.lower() or "clear" in user_correction.lower():
+            LEARNING_MEMORY.record_correction(prompt, prompt, "LEARNING: This prompt was clear, avoided unnecessary clarification")
+    
+    return {
+        "status": "classification_feedback_recorded",
+        "mistakes_learned": len(LEARNING_MEMORY.failed_patterns),
+        "message": f"Classification feedback recorded. System now aware of {len(LEARNING_MEMORY.failed_patterns)} mistake patterns."
+    }
+
+
+async def record_clarification_result(
+    original_prompt: str,
+    clarification_asked: str,
+    user_response: str,
+    success: bool = True
+) -> Dict[str, Any]:
+    """
+    Record the result of a clarification interaction.
+    Used to learn when asking for clarification helps vs. when it's unnecessary.
+    
+    Args:
+        original_prompt: User's original request
+        clarification_asked: What the system asked for clarification on
+        user_response: User's response to the clarification
+        success: Whether this led to a successful optimization
+    """
+    if success:
+        LEARNING_MEMORY.record_clarification_success(
+            original_prompt,
+            clarification_asked,
+            user_response,
+            "Successfully optimized after clarification"
+        )
+    else:
+        LEARNING_MEMORY.record_failure(
+            original_prompt,
+            f"Clarification asked but user response led to failure: {user_response}"
+        )
+    
+    return {
+        "status": "clarification_result_recorded",
+        "successful_clarifications": len(LEARNING_MEMORY.successful_clarifications),
+        "message": f"Clarification pattern recorded. {len(LEARNING_MEMORY.successful_clarifications)} successful clarifications tracked."
+    }
+
+
+async def get_learning_stats() -> Dict[str, Any]:
+    """Return current learning statistics for debugging."""
+    return {
+        "failed_patterns_count": len(LEARNING_MEMORY.failed_patterns),
+        "successful_clarifications_count": len(LEARNING_MEMORY.successful_clarifications),
+        "corrections_applied_count": len(LEARNING_MEMORY.corrections_applied),
+        "user_rejections_count": len(LEARNING_MEMORY.user_rejections),
+        "failed_patterns": LEARNING_MEMORY.failed_patterns,
+        "recent_corrections": LEARNING_MEMORY.corrections_applied[-5:] if LEARNING_MEMORY.corrections_applied else [],
+        "recent_rejections": LEARNING_MEMORY.user_rejections[-5:] if LEARNING_MEMORY.user_rejections else []
+    }
+
+
+async def optimize_with_learning(
+    user_prompt: str,
+    full_context_history: List[Dict[str, Any]],
+    skip_learned_clarifications: bool = True
+) -> Dict[str, Any]:
+    """
+    Optimize a prompt while considering past learnings.
+    If we've learned that similar prompts don't need clarification, skip it.
+    """
+    classification = await classify_prompt(user_prompt, full_context_history)
+    
+    # If learning says to skip clarification for this pattern, override
+    if skip_learned_clarifications and LEARNING_MEMORY.should_skip_clarification(user_prompt):
+        classification["needs_clarification"] = False
+        classification["pathfinder_trigger"] = False
+        classification["learning_override"] = True
+    
+    # Detect image/design requests - these are usually clear and don't need clarification
+    if _is_design_request(user_prompt):
+        classification["type"] = "design_request"
+        classification["needs_clarification"] = False
+        classification["pathfinder_trigger"] = False
+    
+    return classification
+
+
+def _is_design_request(prompt: str) -> bool:
+    """Detect if prompt is asking for image/design generation."""
+    t = (prompt or "").lower()
+    design_keywords = [
+        "image", "design", "visual", "create", "generate", "draw",
+        "differenti", "reference", "exact", "composition", "style",
+        "subject", "modification", "rendering", "illustration"
+    ]
+    return any(keyword in t for keyword in design_keywords)
+
+
 # ======== VIDEO GROUNDING USING GEMINI ========
 
 async def get_video_context_via_search(video_url: str) -> str:
@@ -473,8 +734,20 @@ USER INSTRUCTION: {user_prompt}
     base["complexity_score"] = _clamp(base.get("complexity_score", 0.5), 0.5)
     base["burnout_signal"] = _clamp(base.get("burnout_signal", 0.0), 0.0)
     base["confidence"] = _clamp(base.get("confidence", 0.5), 0.5)
-    base["pathfinder_trigger"] = bool(base.get("pathfinder_trigger")) or base["ambiguity_score"] >= 0.65
-    base["needs_clarification"] = bool(base.get("needs_clarification")) or base["ambiguity_score"] >= 0.6
+    
+    # LEARNING-AWARE CLASSIFICATION: Check if we've learned to avoid clarification for this pattern
+    skip_clarification_from_learning = LEARNING_MEMORY.should_skip_clarification(user_prompt)
+    
+    # Apply learned confidence adjustments
+    learned_confidence_delta = LEARNING_MEMORY.get_learned_confidence_adjustment(base.get("type", "generic"))
+    base["confidence"] = _clamp(base["confidence"] + learned_confidence_delta, 0.5)
+    
+    # DECISION: Trust LLM's output, don't override with rigid keyword thresholds
+    # BUT: If we've learned this pattern should skip clarification, override to False
+    if skip_clarification_from_learning:
+        base["pathfinder_trigger"] = False
+        base["needs_clarification"] = False
+    # Otherwise, respect LLM's decision (don't override with >= 0.65 or >= 0.6 thresholds)
     
     # UNIVERSAL PATTERN DETECTOR: Override tone if consultative response needed
     # This works across ANY domain WITHOUT hardcoding (medical, legal, tech, business, etc.)
@@ -753,10 +1026,25 @@ def build_meta_instruction(
     # TYPE-AWARE GUIDANCE
     type_hint = ""
     if detected_type.startswith("code"):
-        type_hint = (
-            "Prioritize correctness, low time/space complexity, and originality. "
-            "Return only code when explicitly required."
-        )
+        # Check if this is a conceptual software question (vs. actual code generation)
+        task_lower = (task_description or "").lower()
+        is_conceptual = any(word in task_lower for word in ["what is", "define", "explain", "concept", "thinking", "principle", "pattern"])
+        
+        if is_conceptual and user_context and "software development" in user_context.lower():
+            # Conceptual software question: explain through practical software engineering lens
+            type_hint = (
+                "Explain through a PRACTICAL SOFTWARE ENGINEERING LENS: "
+                "focus on real-world coding practices, architecture decisions, pragmatic constraints, "
+                "implementation patterns, and how experienced developers think about this in production systems. "
+                "Use concrete software examples where applicable (design patterns, architectural decisions, trade-offs). "
+                "Bridge theory to practice: explain why this matters for shipping reliable, maintainable code."
+            )
+        else:
+            # Actual code generation
+            type_hint = (
+                "Prioritize correctness, low time/space complexity, and originality. "
+                "Return only code when explicitly required."
+            )
     elif detected_type in ["daily_advice", "personal_advice"]:
         type_hint = (
             "Provide clear, practical, realistic suggestions tailored to the user's goals."
