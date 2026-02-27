@@ -948,7 +948,7 @@ Return ONLY a single, valid JSON object, strictly following this schema:
     "comments": "string" // Brief critique of the output, specifically noting any missed explicit constraints.
 }}
 
-{('CONTEXT META:\n' + meta_header + '\n') if meta_header else ''}
+{('CONTEXT META:' + chr(10) + meta_header + chr(10)) if meta_header else ''}
 ORIGINAL USER TASK: {original_task}
 OPTIMIZED PROMPT USED: {optimized_prompt}
 FINAL OUTPUT RECEIVED: {executor_output}
