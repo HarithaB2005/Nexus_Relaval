@@ -17,7 +17,7 @@ python-dotenv==1.0.0
 
 # HTTP & API
 requests==2.31.0
-httpx==0.25.0
+httpx==0.25.2
 
 # LLM APIs
 groq==0.4.2
