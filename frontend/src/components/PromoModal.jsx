@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 const PromoModal = ({ isOpen, onClose, token, onRefreshUser }) => {
     const [code, setCode] = useState('');
     const [loading, setLoading] = useState(false);
@@ -12,7 +14,7 @@ const PromoModal = ({ isOpen, onClose, token, onRefreshUser }) => {
         setLoading(true);
         setError('');
         try {
-            await axios.post(`${process.env.REACT_APP_API_URL}/auth/redeem-promo`, 
+            await axios.post(`${API_BASE_URL}/auth/redeem-promo`, 
                 { code }, 
                 { headers: { Authorization: `Bearer ${token}` } }
             );
